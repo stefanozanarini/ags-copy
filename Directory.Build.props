@@ -1,0 +1,13 @@
+<Project>
+  <PropertyGroup>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <Version>0.1.0</Version>
+    <Company>AGS Media</Company>
+    <Product>AGS-Copy</Product>
+    <Copyright>AGS Media</Copyright>
+    <!-- Lets the Windows-only projects build on Linux/macOS (CI, Docker). -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <RootNamespace>AgsCopy.App</RootNamespace>
+    <AssemblyName>AGS-Copy</AssemblyName>
+    <UseWPF>true</UseWPF>
+    <!-- NotifyIcon for the tray. -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <!-- WPF and WinForms share type names; usings are explicit (GlobalUsings.cs). -->
+    <ImplicitUsings>disable</ImplicitUsings>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AgsCopy.Core\AgsCopy.Core.csproj" />
+  </ItemGroup>
+
+</Project>

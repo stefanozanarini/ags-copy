@@ -1,0 +1,399 @@
+<Window x:Class="AgsCopy.App.JobEditorWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:l="clr-namespace:AgsCopy.App"
+        xmlns:core="clr-namespace:AgsCopy.Core;assembly=AgsCopy.Core"
+        Style="{StaticResource AppWindow}"
+        Title="{l:T editor.title}" Width="980" Height="700" MinWidth="820" MinHeight="560"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
+    <Window.Resources>
+        <!-- Lines of the plain-language summary, coloured by importance. -->
+        <DataTemplate x:Key="SummaryLineTemplate" DataType="{x:Type core:SummaryLine}">
+            <Border x:Name="Box" Padding="10,6" Margin="0,0,0,4" CornerRadius="4" Background="{StaticResource Surface}">
+                <TextBlock x:Name="Txt" Text="{Binding Text}" TextWrapping="Wrap" />
+            </Border>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding Level}" Value="Warning">
+                    <Setter TargetName="Box" Property="Background" Value="{StaticResource WarningLight}" />
+                    <Setter TargetName="Txt" Property="Foreground" Value="{StaticResource Warning}" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding Level}" Value="Danger">
+                    <Setter TargetName="Box" Property="Background" Value="{StaticResource DangerLight}" />
+                    <Setter TargetName="Txt" Property="Foreground" Value="{StaticResource Danger}" />
+                    <Setter TargetName="Txt" Property="FontWeight" Value="SemiBold" />
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+
+        <Style TargetType="RadioButton" x:Key="ModeCard">
+            <Setter Property="Margin" Value="0,0,0,10" />
+            <Setter Property="Padding" Value="8,0,0,0" />
+            <Setter Property="VerticalContentAlignment" Value="Top" />
+        </Style>
+
+        <!-- Path, credentials and access check of a source or destination (DataContext: EndpointViewModel). -->
+        <DataTemplate x:Key="EndpointTemplate" DataType="{x:Type l:EndpointViewModel}">
+            <StackPanel>
+                <TextBlock Text="{l:T endpoint.path}" Style="{StaticResource FieldLabel}" />
+                <DockPanel>
+                    <Button DockPanel.Dock="Right" Content="{l:T endpoint.browse}" Click="Browse_Click" Margin="6,0,0,0" />
+                    <TextBox Text="{Binding Path, UpdateSourceTrigger=PropertyChanged}" FontFamily="Consolas" />
+                </DockPanel>
+                <TextBlock Text="{l:T endpoint.path.hint}" Style="{StaticResource Hint}" />
+
+                <Border Style="{StaticResource Card}" Background="{StaticResource AccentLight}" BorderBrush="{StaticResource Accent}"
+                        Visibility="{Binding IsNetwork, Converter={StaticResource BoolToVis}}">
+                    <StackPanel>
+                        <TextBlock Text="{l:T endpoint.network}" FontWeight="SemiBold" />
+                        <TextBlock Text="{l:T endpoint.network.hint}" Style="{StaticResource Hint}" />
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="12" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="{l:T endpoint.user}" Style="{StaticResource FieldLabel}" />
+                                <TextBox Text="{Binding UserName, UpdateSourceTrigger=PropertyChanged}" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="{l:T endpoint.password}" Style="{StaticResource FieldLabel}" />
+                                <PasswordBox PasswordChanged="Password_Changed" />
+                            </StackPanel>
+                        </Grid>
+                        <TextBlock Text="{l:T endpoint.password.stored}" Style="{StaticResource Hint}"
+                                   Visibility="{Binding HasStoredPassword, Converter={StaticResource BoolToVis}}" />
+                        <TextBlock Text="{l:T endpoint.encrypted}" Style="{StaticResource Hint}" />
+                    </StackPanel>
+                </Border>
+
+                <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                    <Button Content="{l:T endpoint.test}" Click="Test_Click" />
+                    <TextBlock x:Name="Result" Text="{Binding TestResult}" VerticalAlignment="Center" TextWrapping="Wrap" MaxWidth="480" FontWeight="SemiBold" />
+                </StackPanel>
+            </StackPanel>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding TestOk}" Value="True">
+                    <Setter TargetName="Result" Property="Foreground" Value="{StaticResource Ok}" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding TestOk}" Value="False">
+                    <Setter TargetName="Result" Property="Foreground" Value="{StaticResource Danger}" />
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+    </Window.Resources>
+
+    <DockPanel>
+        <!-- Buttons -->
+        <Border DockPanel.Dock="Bottom" Background="{StaticResource Surface}" BorderBrush="{StaticResource Border}" BorderThickness="0,1,0,0" Padding="16,10">
+            <DockPanel>
+                <Button DockPanel.Dock="Left" Content="{l:T editor.cancel}" IsCancel="True" />
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button Content="{l:T editor.back}" Click="Back_Click" IsEnabled="{Binding IsFirstStep, Converter={x:Static l:Not.Instance}}" />
+                    <Button Content="{l:T editor.next}" Click="Next_Click" Visibility="{Binding IsSummaryStep, Converter={x:Static l:NotVisible.Instance}}" />
+                    <Button x:Name="SaveButton" Content="{l:T editor.save}" Style="{StaticResource PrimaryButton}" Click="Save_Click" />
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
+        <!-- Steps -->
+        <Border DockPanel.Dock="Left" Width="210" Background="{StaticResource Surface}" BorderBrush="{StaticResource Border}" BorderThickness="0,0,1,0">
+            <ListBox ItemsSource="{Binding StepTitles}" SelectedIndex="{Binding Step}" BorderThickness="0" Background="Transparent" Padding="0,10">
+                <ListBox.ItemContainerStyle>
+                    <Style TargetType="ListBoxItem">
+                        <Setter Property="Padding" Value="16,9" />
+                        <Setter Property="FontSize" Value="14" />
+                    </Style>
+                </ListBox.ItemContainerStyle>
+            </ListBox>
+        </Border>
+
+        <TabControl SelectedIndex="{Binding Step}" BorderThickness="0" Padding="0">
+            <TabControl.ItemContainerStyle>
+                <Style TargetType="TabItem">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                </Style>
+            </TabControl.ItemContainerStyle>
+
+            <!-- 1. General -->
+            <TabItem>
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="24,18" MaxWidth="640" HorizontalAlignment="Left">
+                        <TextBlock Text="{l:T step.general}" Style="{StaticResource SectionTitle}" />
+                        <TextBlock Text="{l:T general.hint}" Style="{StaticResource Hint}" />
+                        <TextBlock Text="{l:T general.name}" Style="{StaticResource FieldLabel}" />
+                        <TextBox x:Name="NameBox" Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" />
+                        <CheckBox Content="{l:T general.enabled}" IsChecked="{Binding Enabled}" Margin="0,14,0,0" />
+                        <TextBlock Text="{l:T general.enabled.hint}" Style="{StaticResource Hint}" Margin="20,2,0,0" />
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- 2. Source -->
+            <TabItem>
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="24,18" MaxWidth="680" HorizontalAlignment="Left" DataContext="{Binding Source}">
+                        <TextBlock Text="{l:T step.source}" Style="{StaticResource SectionTitle}" />
+                        <TextBlock Text="{l:T source.hint}" Style="{StaticResource Hint}" />
+                        <ContentControl Content="{Binding}" ContentTemplate="{StaticResource EndpointTemplate}" Tag="source" />
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- 3. Destination -->
+            <TabItem>
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="24,18" MaxWidth="680" HorizontalAlignment="Left" DataContext="{Binding Destination}">
+                        <TextBlock Text="{l:T step.destination}" Style="{StaticResource SectionTitle}" />
+                        <TextBlock Text="{l:T destination.hint}" Style="{StaticResource Hint}" />
+                        <ContentControl Content="{Binding}" ContentTemplate="{StaticResource EndpointTemplate}" Tag="destination" />
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- 4. Mode -->
+            <TabItem>
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="24,18" MaxWidth="680" HorizontalAlignment="Left">
+                        <TextBlock Text="{l:T step.mode}" Style="{StaticResource SectionTitle}" />
+                        <TextBlock Text="{l:T mode.hint}" Style="{StaticResource Hint}" />
+                        <Border Style="{StaticResource Card}">
+                            <RadioButton GroupName="Mode" IsChecked="{Binding ModeCopy}" Style="{StaticResource ModeCard}">
+                                <StackPanel>
+                                    <TextBlock Text="{l:T mode.Copy}" FontWeight="SemiBold" FontSize="15" />
+                                    <TextBlock Text="{l:T mode.Copy.desc}" TextWrapping="Wrap" Foreground="{StaticResource Muted}" />
+                                </StackPanel>
+                            </RadioButton>
+                        </Border>
+                        <Border Style="{StaticResource Card}">
+                            <RadioButton GroupName="Mode" IsChecked="{Binding ModeMirror}" Style="{StaticResource ModeCard}">
+                                <StackPanel>
+                                    <TextBlock Text="{l:T mode.Mirror}" FontWeight="SemiBold" FontSize="15" />
+                                    <TextBlock Text="{l:T mode.Mirror.desc}" TextWrapping="Wrap" Foreground="{StaticResource Muted}" />
+                                    <TextBlock Text="{l:T mode.Mirror.warn}" TextWrapping="Wrap" Foreground="{StaticResource Danger}" FontWeight="SemiBold" Margin="0,4,0,0" />
+                                </StackPanel>
+                            </RadioButton>
+                        </Border>
+                        <Border Style="{StaticResource Card}">
+                            <RadioButton GroupName="Mode" IsChecked="{Binding ModeMove}" Style="{StaticResource ModeCard}">
+                                <StackPanel>
+                                    <TextBlock Text="{l:T mode.Move}" FontWeight="SemiBold" FontSize="15" />
+                                    <TextBlock Text="{l:T mode.Move.desc}" TextWrapping="Wrap" Foreground="{StaticResource Muted}" />
+                                    <TextBlock Text="{l:T mode.Move.warn}" TextWrapping="Wrap" Foreground="{StaticResource Danger}" FontWeight="SemiBold" Margin="0,4,0,0" />
+                                </StackPanel>
+                            </RadioButton>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- 5. Options -->
+            <TabItem>
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="24,18" MaxWidth="680" HorizontalAlignment="Left">
+                        <TextBlock Text="{l:T step.options}" Style="{StaticResource SectionTitle}" />
+
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="{l:T options.speed}" FontWeight="SemiBold" FontSize="15" />
+                                <TextBlock Text="{l:T options.threads}" Style="{StaticResource FieldLabel}" />
+                                <DockPanel>
+                                    <TextBlock DockPanel.Dock="Right" Text="{Binding Threads}" Width="40" TextAlignment="Right" FontWeight="SemiBold" />
+                                    <Slider Minimum="1" Maximum="128" Value="{Binding Threads}" IsSnapToTickEnabled="True" TickFrequency="1" />
+                                </DockPanel>
+                                <TextBlock Text="{l:T options.threads.hint}" Style="{StaticResource Hint}" />
+                                <TextBlock Text="{l:T options.processes}" Style="{StaticResource FieldLabel}" />
+                                <DockPanel>
+                                    <TextBlock DockPanel.Dock="Right" Text="{Binding Processes}" Width="40" TextAlignment="Right" FontWeight="SemiBold" />
+                                    <Slider Minimum="1" Maximum="16" Value="{Binding Processes}" IsSnapToTickEnabled="True" TickFrequency="1" TickPlacement="BottomRight" />
+                                </DockPanel>
+                                <TextBlock Text="{l:T options.processes.hint}" Style="{StaticResource Hint}" />
+                                <TextBlock Text="{Binding SpeedText}" Foreground="{StaticResource Accent}" FontWeight="SemiBold" />
+                                <CheckBox Content="{l:T options.unbuffered}" IsChecked="{Binding UnbufferedIO}" Margin="0,10,0,0" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="{l:T options.what}" FontWeight="SemiBold" FontSize="15" />
+                                <TextBlock Text="{l:T options.props}" Style="{StaticResource FieldLabel}" />
+                                <ComboBox SelectedIndex="{Binding FileProperties}">
+                                    <ComboBoxItem Content="{l:T props.DataAttributesTimestamps}" />
+                                    <ComboBoxItem Content="{l:T props.WithSecurity}" />
+                                    <ComboBoxItem Content="{l:T props.All}" />
+                                </ComboBox>
+                                <CheckBox Content="{l:T options.xo}" IsChecked="{Binding ExcludeOlder}" Margin="0,10,0,0" />
+                                <CheckBox Content="{l:T options.xj}" IsChecked="{Binding SkipJunctions}" Margin="0,6,0,0" />
+                                <CheckBox Content="{l:T options.fft}" IsChecked="{Binding FatFileTimes}" Margin="0,6,0,0" />
+                                <CheckBox Content="{l:T options.backup}" IsChecked="{Binding BackupMode}" Margin="0,6,0,0" />
+                                <Grid Margin="0,8,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="16" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{l:T options.xf}" Style="{StaticResource FieldLabel}" />
+                                        <TextBox Text="{Binding ExcludeFiles}" AcceptsReturn="True" Height="80" VerticalScrollBarVisibility="Auto" />
+                                        <TextBlock Text="{l:T options.xf.hint}" Style="{StaticResource Hint}" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="{l:T options.xd}" Style="{StaticResource FieldLabel}" />
+                                        <TextBox Text="{Binding ExcludeDirectories}" AcceptsReturn="True" Height="80" VerticalScrollBarVisibility="Auto" />
+                                        <TextBlock Text="{l:T options.xd.hint}" Style="{StaticResource Hint}" />
+                                    </StackPanel>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="{l:T options.errors}" FontWeight="SemiBold" FontSize="15" />
+                                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                    <TextBlock Text="{l:T options.retries}" VerticalAlignment="Center" />
+                                    <TextBox Text="{Binding Retries}" Width="50" Margin="8,0,20,0" />
+                                    <TextBlock Text="{l:T options.wait}" VerticalAlignment="Center" />
+                                    <TextBox Text="{Binding RetryWaitSeconds}" Width="50" Margin="8,0,0,0" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <Expander Header="{l:T options.advanced}">
+                            <StackPanel Margin="0,6,0,0">
+                                <TextBlock Text="{l:T options.extra}" Style="{StaticResource FieldLabel}" />
+                                <TextBox Text="{Binding ExtraArguments}" FontFamily="Consolas" />
+                                <TextBlock Text="{l:T options.extra.hint}" Style="{StaticResource Hint}" />
+                            </StackPanel>
+                        </Expander>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- 6. Schedule -->
+            <TabItem>
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="24,18" MaxWidth="640" HorizontalAlignment="Left">
+                        <TextBlock Text="{l:T step.schedule}" Style="{StaticResource SectionTitle}" />
+                        <TextBlock Text="{l:T schedule.hint}" Style="{StaticResource Hint}" />
+                        <TextBlock Text="{l:T schedule.when}" Style="{StaticResource FieldLabel}" />
+                        <ComboBox SelectedIndex="{Binding ScheduleIndex}" Width="260" HorizontalAlignment="Left">
+                            <ComboBoxItem Content="{l:T kind.Manual}" />
+                            <ComboBoxItem Content="{l:T kind.Once}" />
+                            <ComboBoxItem Content="{l:T kind.Daily}" />
+                            <ComboBoxItem Content="{l:T kind.Weekly}" />
+                            <ComboBoxItem Content="{l:T kind.Monthly}" />
+                            <ComboBoxItem Content="{l:T kind.Interval}" />
+                        </ComboBox>
+
+                        <StackPanel Visibility="{Binding ShowDays, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="{l:T schedule.days}" Style="{StaticResource FieldLabel}" />
+                            <ItemsControl ItemsSource="{Binding Days}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <WrapPanel />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <CheckBox Content="{Binding Name}" IsChecked="{Binding Selected}" Margin="0,0,14,0" />
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+
+                        <StackPanel Visibility="{Binding ShowDayOfMonth, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="{l:T schedule.dayofmonth}" Style="{StaticResource FieldLabel}" />
+                            <TextBox Text="{Binding DayOfMonth}" Width="60" HorizontalAlignment="Left" />
+                            <TextBlock Text="{l:T schedule.dayofmonth.hint}" Style="{StaticResource Hint}" />
+                        </StackPanel>
+
+                        <StackPanel Visibility="{Binding ShowInterval, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="{l:T schedule.interval}" Style="{StaticResource FieldLabel}" />
+                            <TextBox Text="{Binding IntervalMinutes}" Width="80" HorizontalAlignment="Left" />
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal">
+                            <StackPanel Visibility="{Binding ShowDate, Converter={StaticResource BoolToVis}}" Margin="0,0,16,0">
+                                <TextBlock Text="{l:T schedule.date}" Style="{StaticResource FieldLabel}" />
+                                <DatePicker SelectedDate="{Binding StartDate}" Width="150" />
+                            </StackPanel>
+                            <StackPanel Visibility="{Binding ShowTime, Converter={StaticResource BoolToVis}}">
+                                <TextBlock Text="{l:T schedule.time}" Style="{StaticResource FieldLabel}" />
+                                <TextBox Text="{Binding StartTime}" Width="70" />
+                            </StackPanel>
+                        </StackPanel>
+
+                        <CheckBox Content="{l:T schedule.missed}" IsChecked="{Binding RunMissed}" Margin="0,14,0,0"
+                                  Visibility="{Binding ShowRunMissed, Converter={StaticResource BoolToVis}}" />
+                        <TextBlock Text="{l:T schedule.service}" Style="{StaticResource Hint}" Margin="0,16,0,0" />
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- 7. Summary -->
+            <TabItem>
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="24,18">
+                        <TextBlock Text="{l:T step.summary}" Style="{StaticResource SectionTitle}" />
+                        <TextBlock Text="{l:T summary.hint}" Style="{StaticResource Hint}" />
+
+                        <Border Background="{StaticResource DangerLight}" Padding="10,8" CornerRadius="4" Margin="0,0,0,10"
+                                Visibility="{Binding HasErrors, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="{Binding Errors}" Foreground="{StaticResource Danger}" TextWrapping="Wrap" FontWeight="SemiBold" />
+                        </Border>
+
+                        <ItemsControl ItemsSource="{Binding SummaryLines}" ItemTemplate="{StaticResource SummaryLineTemplate}" />
+
+                        <Border Style="{StaticResource Card}" Margin="0,10,0,10">
+                            <StackPanel>
+                                <DockPanel>
+                                    <Button x:Name="PreviewButton" DockPanel.Dock="Right" Content="{l:T summary.preview}" Click="Preview_Click" Margin="0" />
+                                    <StackPanel>
+                                        <TextBlock Text="{l:T summary.preview.title}" FontWeight="SemiBold" FontSize="15" />
+                                        <TextBlock Text="{l:T summary.preview.hint}" Style="{StaticResource Hint}" Margin="0,2,12,0" />
+                                    </StackPanel>
+                                </DockPanel>
+                                <ProgressBar IsIndeterminate="True" Height="4" Margin="0,10,0,0"
+                                             Visibility="{Binding PreviewRunning, Converter={StaticResource BoolToVis}}" />
+                                <StackPanel Visibility="{Binding HasPreview, Converter={StaticResource BoolToVis}}" Margin="0,10,0,0">
+                                    <ItemsControl ItemsSource="{Binding PreviewLines}" ItemTemplate="{StaticResource SummaryLineTemplate}" />
+                                    <Expander Header="{Binding ExtraItemsTitle}" IsExpanded="True" Margin="0,6,0,0"
+                                              Visibility="{Binding HasExtraItems, Converter={StaticResource BoolToVis}}">
+                                        <ListView ItemsSource="{Binding ExtraItems}" MaxHeight="220" Margin="0,4,0,0">
+                                            <ListView.View>
+                                                <GridView>
+                                                    <GridViewColumn Header="{l:T preview.path}" DisplayMemberBinding="{Binding Path}" Width="560" />
+                                                    <GridViewColumn Header="{l:T preview.size}" DisplayMemberBinding="{Binding Size}" Width="170" />
+                                                </GridView>
+                                            </ListView.View>
+                                        </ListView>
+                                    </Expander>
+                                    <Expander Header="{Binding CopyItemsTitle}" Margin="0,6,0,0">
+                                        <ListView ItemsSource="{Binding CopyItems}" MaxHeight="220" Margin="0,4,0,0">
+                                            <ListView.View>
+                                                <GridView>
+                                                    <GridViewColumn Header="{l:T preview.path}" DisplayMemberBinding="{Binding Path}" Width="560" />
+                                                    <GridViewColumn Header="{l:T preview.size}" DisplayMemberBinding="{Binding Size}" Width="170" />
+                                                </GridView>
+                                            </ListView.View>
+                                        </ListView>
+                                    </Expander>
+                                    <Expander Header="{l:T preview.command}" Margin="0,6,0,0">
+                                        <TextBox Text="{Binding Preview.CommandLine, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" FontFamily="Consolas" Margin="0,4,0,0" />
+                                    </Expander>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Background="{StaticResource DangerLight}" BorderBrush="{StaticResource Danger}" BorderThickness="1" CornerRadius="4" Padding="12,10"
+                                Visibility="{Binding DeletesFiles, Converter={StaticResource BoolToVis}}">
+                            <CheckBox IsChecked="{Binding DeletionConfirmed}" VerticalContentAlignment="Center">
+                                <TextBlock Text="{l:T summary.confirm}" TextWrapping="Wrap" Foreground="{StaticResource Danger}" FontWeight="SemiBold" />
+                            </CheckBox>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+        </TabControl>
+    </DockPanel>
+</Window>
