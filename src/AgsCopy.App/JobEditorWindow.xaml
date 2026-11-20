@@ -190,6 +190,9 @@
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
                                 <TextBlock Text="{l:T options.speed}" FontWeight="SemiBold" FontSize="15" />
+                                <CheckBox Content="{l:T options.auto}" IsChecked="{Binding AutoTune}" Margin="0,10,0,0" FontWeight="SemiBold" />
+                                <TextBlock Text="{l:T options.auto.hint}" Style="{StaticResource Hint}" Margin="20,2,0,4" />
+                                <StackPanel IsEnabled="{Binding AutoTune, Converter={x:Static l:Not.Instance}}">
                                 <TextBlock Text="{l:T options.threads}" Style="{StaticResource FieldLabel}" />
                                 <DockPanel>
                                     <TextBlock DockPanel.Dock="Right" Text="{Binding Threads}" Width="40" TextAlignment="Right" FontWeight="SemiBold" />
@@ -202,6 +205,7 @@
                                     <Slider Minimum="1" Maximum="16" Value="{Binding Processes}" IsSnapToTickEnabled="True" TickFrequency="1" TickPlacement="BottomRight" />
                                 </DockPanel>
                                 <TextBlock Text="{l:T options.processes.hint}" Style="{StaticResource Hint}" />
+                                </StackPanel>
                                 <TextBlock Text="{Binding SpeedText}" Foreground="{StaticResource Accent}" FontWeight="SemiBold" />
                                 <CheckBox Content="{l:T options.unbuffered}" IsChecked="{Binding UnbufferedIO}" Margin="0,10,0,0" />
                             </StackPanel>
@@ -210,6 +214,8 @@
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
                                 <TextBlock Text="{l:T options.what}" FontWeight="SemiBold" FontSize="15" />
+                                <CheckBox Content="{l:T options.vss}" IsChecked="{Binding UseShadowCopy}" Margin="0,10,0,0" FontWeight="SemiBold" />
+                                <TextBlock Text="{l:T options.vss.hint}" Style="{StaticResource Hint}" Margin="20,2,0,4" />
                                 <TextBlock Text="{l:T options.props}" Style="{StaticResource FieldLabel}" />
                                 <ComboBox SelectedIndex="{Binding FileProperties}">
                                     <ComboBoxItem Content="{l:T props.DataAttributesTimestamps}" />

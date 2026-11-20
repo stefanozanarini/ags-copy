@@ -246,6 +246,82 @@ public class ParallelPlanTests
         Assert.Equal(excluded, ParallelPlan.IsExcluded([pattern], @"C:\x", name));
 }
 
+public class SnapshotPathsTests
+{
+    private const string Link = @"C:\ProgramData\AGS-Copy\vss\run1";
+
+    [Theory]
+    [InlineData(@"D:\Data\Docs", @"D:\", Link + @"\Data\Docs")]
+    [InlineData(@"D:\", @"D:\", Link)]
+    [InlineData(@"C:\Mnt\Vol\Projects", @"C:\Mnt\Vol\", Link + @"\Projects")]
+    [InlineData(@"E:\Other", @"D:\", @"E:\Other")]
+    [InlineData("Temp", @"D:\", "Temp")]
+    public void Map(string path, string volume, string expected) => Assert.Equal(expected, SnapshotPaths.Map(path, volume, Link));
+
+    [Fact]
+    public void Source_and_absolute_exclusions_move_to_the_snapshot_destination_does_not()
+    {
+        var job = new CopyJob
+        {
+            Source = new JobEndpoint { Path = @"D:\Data" },
+            Destination = new JobEndpoint { Path = @"D:\Backup" },
+            Options = new CopyOptions { ExcludeDirectories = [@"D:\Data\Cache", "Temp"], ExcludeFiles = ["*.tmp"] },
+        };
+        var s = SnapshotPaths.ForSnapshot(job, @"D:\", Link);
+        Assert.Equal(Link + @"\Data", s.Source.Path);
+        Assert.Equal(@"D:\Backup", s.Destination.Path);
+        Assert.Equal([Link + @"\Data\Cache", "Temp"], s.Options.ExcludeDirectories);
+        Assert.Equal(["*.tmp"], s.Options.ExcludeFiles);
+        Assert.Equal(@"D:\Data", job.Source.Path); // the original job is untouched
+    }
+}
+
+public class AutoTuneTests
+{
+    private const long GB = 1024L * 1024 * 1024;
+
+    [Fact]
+    public void Idle_server_with_many_folders_uses_several_processes()
+    {
+        var t = AutoTune.Compute(new Resources(16, 0.05, 32 * GB), network: true, topLevelFolders: 40);
+        Assert.Equal(7, t.Processes);
+        Assert.InRange(t.TotalThreads, 100, AutoTune.MaxTotalThreads);
+        Assert.InRange(t.Threads, 1, CopyOptions.MaxThreads);
+    }
+
+    [Fact]
+    public void Network_gets_more_threads_than_local()
+    {
+        var r = new Resources(4, 0, 8 * GB);
+        Assert.True(AutoTune.Compute(r, true, 1).TotalThreads > AutoTune.Compute(r, false, 1).TotalThreads);
+    }
+
+    [Fact]
+    public void A_busy_cpu_gets_fewer_threads()
+    {
+        var idle = AutoTune.Compute(new Resources(8, 0, 16 * GB), false, 10);
+        var busy = AutoTune.Compute(new Resources(8, 0.9, 16 * GB), false, 10);
+        Assert.True(busy.TotalThreads < idle.TotalThreads);
+        Assert.Equal(1, busy.Processes);
+    }
+
+    [Fact]
+    public void Little_ram_limits_threads_and_processes()
+    {
+        var t = AutoTune.Compute(new Resources(16, 0, 512L * 1024 * 1024), true, 50);
+        Assert.Equal(1, t.Processes);
+        Assert.Equal(16, t.Threads); // (128 MB - 64 MB) / 4 MB
+    }
+
+    [Fact]
+    public void One_folder_means_one_process() =>
+        Assert.Equal(1, AutoTune.Compute(new Resources(32, 0, 64 * GB), true, 1).Processes);
+
+    [Fact]
+    public void Never_below_one_thread_even_with_no_memory() =>
+        Assert.Equal(1, AutoTune.Compute(new Resources(1, 1, 0), false, 0).Threads);
+}
+
 public class CommandLineTests
 {
     [Fact]

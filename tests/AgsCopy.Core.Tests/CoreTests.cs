@@ -163,6 +163,7 @@ public class ValidationAndTextTests
                 Assert.Equal(mode == CopyMode.Mirror, lines.Any(l => l.Level == SummaryLevel.Danger));
                 // Every summary states that the source is left untouched.
                 Assert.Contains(lines, l => l.Text == Loc.F("sum.readonly", @"C:\Docs"));
+                Assert.Contains(lines, l => l.Text == Loc.F("sum.vss", "C:"));
             }
         }
         finally

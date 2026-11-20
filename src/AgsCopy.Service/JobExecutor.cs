@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.ComponentModel;
+using ManagementException = System.Management.ManagementException;
 using System.Diagnostics;
 using System.Text;
 using AgsCopy.Core;
@@ -13,6 +15,7 @@ public sealed class RunningJob
 {
     public required RunRecord Record { get; init; }
     public required CancellationTokenSource Cancel { get; init; }
+    public bool ShadowCopyFailed { get; set; }
     public List<ProgressCounter> Counters { get; } = [];
 
     public long Files
@@ -56,7 +59,11 @@ public sealed class JobExecutor(HistoryStore history, ILogger<JobExecutor> log) 
         return true;
     }
 
-    public Task StartAsync(CancellationToken ct) => Task.CompletedTask;
+    public Task StartAsync(CancellationToken ct)
+    {
+        ShadowCopy.CleanupLeftovers(log);
+        return Task.CompletedTask;
+    }
 
     public async Task StopAsync(CancellationToken ct)
     {
@@ -76,16 +83,47 @@ public sealed class JobExecutor(HistoryStore history, ILogger<JobExecutor> log) 
         log.LogInformation("Job {Name} started ({Trigger})", job.Name, record.Trigger);
 
         var src = PathUtil.NormalizeDir(job.Source.Path);
-        var dst = PathUtil.NormalizeDir(job.Destination.Path);
         var parts = new List<(string Label, string Command, string File)>();
         var leases = new List<NetworkShare.Lease>();
+        var notes = new List<string>();
+        ShadowCopy? snapshot = null;
         try
         {
             leases.AddRange(Connect(job, null, null));
             if (!Directory.Exists(src)) throw new ServiceException(Loc.Fl(null, "err.nosource", src));
 
-            var names = job.Options.Processes > 1 ? TopLevelFolders(src, job.Options.SkipJunctions) : [];
-            var tasks = ParallelPlan.Build(job, names);
+            // From here on runJob reads the source from the snapshot, when there is one.
+            var runJob = job;
+            if (job.Options.UseShadowCopy && !job.Source.IsNetwork)
+            {
+                try
+                {
+                    snapshot = await ShadowCopy.CreateAsync(src, record.Id, ct);
+                    runJob = SnapshotPaths.ForSnapshot(job, snapshot.VolumeRoot, snapshot.LinkPath);
+                    notes.Add(Loc.Fl(null, "run.vss", snapshot.VolumeRoot, runJob.Source.Path));
+                    log.LogInformation("Job {Name}: shadow copy {Id} of {Volume}", job.Name, snapshot.ShadowId, snapshot.VolumeRoot);
+                }
+                catch (Exception e) when (e is ShadowCopyException or ManagementException or Win32Exception or UnauthorizedAccessException or IOException)
+                {
+                    // Copy anyway: everything but the open files still gets copied.
+                    rj.ShadowCopyFailed = true;
+                    notes.Add(Loc.Fl(null, "run.vss.failed", e.Message));
+                    log.LogWarning(e, "Job {Name}: shadow copy failed, copying without it", job.Name);
+                }
+            }
+            src = PathUtil.NormalizeDir(runJob.Source.Path);
+
+            var names = job.Options.AutoTune || job.Options.Processes > 1 ? TopLevelFolders(src, job.Options.SkipJunctions) : [];
+            if (job.Options.AutoTune)
+            {
+                var tune = AutoTune.Compute(await ResourceProbe.MeasureAsync(ct), IsNetwork(job), names.Count);
+                runJob = Json.Clone(runJob);
+                runJob.Options.Processes = tune.Processes;
+                runJob.Options.Threads = tune.Threads;
+                notes.Add(DescribeTune(tune));
+                log.LogInformation("Job {Name}: auto-tuned to {Processes} processes x {Threads} threads", job.Name, tune.Processes, tune.Threads);
+            }
+            var tasks = ParallelPlan.Build(runJob, names);
             var consoleSource = RobocopyProcess.AsConsoleText(src);
             var combined = 0;
             var total = RobocopySummary.Empty;
@@ -93,11 +131,11 @@ public sealed class JobExecutor(HistoryStore history, ILogger<JobExecutor> log) 
             for (var i = 0; i < tasks.Count; i++)
                 parts.Add((tasks[i].Label, "", Path.Combine(logDir, $"{stamp}-{i:0000}.part")));
 
-            var options = new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, job.Options.Processes), CancellationToken = ct };
+            var options = new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, runJob.Options.Processes), CancellationToken = ct };
             await Parallel.ForEachAsync(Enumerable.Range(0, tasks.Count), options, async (i, token) =>
             {
                 var t = tasks[i];
-                var args = RobocopyArgs.Build(job, t.Source, t.Destination, t.Pass, false, parts[i].File, true, t.RootExcludedDirs);
+                var args = RobocopyArgs.Build(runJob, t.Source, t.Destination, t.Pass, false, parts[i].File, true, t.RootExcludedDirs);
                 lock (parts) parts[i] = parts[i] with { Command = "robocopy " + CommandLine.Join(args) };
 
                 var counter = new ProgressCounter(consoleSource);
@@ -124,7 +162,9 @@ public sealed class JobExecutor(HistoryStore history, ILogger<JobExecutor> log) 
             record.FilesFailed = total.Files.Failed;
             record.FilesExtra = total.Files.Extras;
             record.DirsExtra = total.Dirs.Extras;
-            if (tasks.Count > 1) record.Message = Loc.Fl(null, "run.parallel", tasks.Count);
+            if (tasks.Count > 1) notes.Add(Loc.Fl(null, "run.parallel", tasks.Count));
+            // Without the snapshot, open files may have been skipped: never report a clean success.
+            if (rj.ShadowCopyFailed && record.Outcome == RunOutcome.Success) record.Outcome = RunOutcome.Warning;
         }
         catch (OperationCanceledException)
         {
@@ -133,12 +173,24 @@ public sealed class JobExecutor(HistoryStore history, ILogger<JobExecutor> log) 
         catch (Exception e)
         {
             record.Outcome = RunOutcome.Failed;
-            record.Message = e.Message;
+            notes.Insert(0, e.Message);
             log.LogError(e, "Job {Name} failed", job.Name);
         }
         finally
         {
+            if (snapshot != null)
+            {
+                try
+                {
+                    snapshot.Dispose();
+                }
+                catch (Exception e)
+                {
+                    log.LogWarning(e, "Job {Name}: cannot remove shadow copy {Id}", job.Name, snapshot.ShadowId);
+                }
+            }
             foreach (var l in leases) l.Dispose();
+            if (notes.Count > 0) record.Message = string.Join(" ", notes);
             record.EndUtc = DateTime.UtcNow;
             if (record.Outcome == RunOutcome.Running) record.Outcome = RunOutcome.Failed;
             try
@@ -156,6 +208,11 @@ public sealed class JobExecutor(HistoryStore history, ILogger<JobExecutor> log) 
             log.LogInformation("Job {Name} finished: {Outcome}, exit code {Code}", job.Name, record.Outcome, record.ExitCode);
         }
     }
+
+    private static bool IsNetwork(CopyJob job) => job.Source.IsNetwork || job.Destination.IsNetwork;
+
+    private static string DescribeTune(TuneResult t) =>
+        Loc.Fl(null, "run.auto", t.Processes, t.Threads, t.Resources.LogicalCores, (int)Math.Round(t.Resources.CpuLoad * 100), Fmt.Bytes(t.Resources.AvailableRamBytes, Loc.CultureOf(null)));
 
     /// <summary>
     /// Runs robocopy /L over the whole tree and reports what a real run would copy and delete.
@@ -179,6 +236,13 @@ public sealed class JobExecutor(HistoryStore history, ILogger<JobExecutor> log) 
             }
             result.DestinationExists = Directory.Exists(dst);
 
+            if (job.Options.AutoTune)
+            {
+                var tune = AutoTune.Compute(await ResourceProbe.MeasureAsync(ct), IsNetwork(job), 1);
+                job = Json.Clone(job);
+                job.Options.Processes = 1;
+                job.Options.Threads = tune.Threads;
+            }
             var args = RobocopyArgs.Build(job, src, dst, RobocopyPass.Full, true, logFile, false);
             var code = await RobocopyProcess.RunAsync(args, null, ct);
             if (File.Exists(logFile))

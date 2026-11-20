@@ -35,6 +35,15 @@ public static class JobDescriber
                 break;
         }
         Add(SummaryLevel.Info, "sum.readonly", src);
+        if (job.Options.UseShadowCopy)
+        {
+            if (job.Source.IsNetwork) Add(SummaryLevel.Warning, "sum.vss.network");
+            else Add(SummaryLevel.Info, "sum.vss", src.Length >= 2 ? src[..2] : src); // the drive, D:
+        }
+        else if (!job.Source.IsNetwork)
+        {
+            Add(SummaryLevel.Info, "sum.novss");
+        }
 
         AddEndpoint(job.Source, "sum.net.source");
         AddEndpoint(job.Destination, "sum.net.destination");
@@ -44,7 +53,8 @@ public static class JobDescriber
         if (o.ExcludeDirectories.Count > 0) Add(SummaryLevel.Info, "sum.xd", string.Join(", ", o.ExcludeDirectories));
         if (o.ExcludeOlder) Add(SummaryLevel.Info, "sum.xo");
         Add(SummaryLevel.Info, "sum.props." + o.FileProperties);
-        Add(SummaryLevel.Info, o.Processes > 1 ? "sum.speed.parallel" : "sum.speed", o.Processes, o.Threads, o.Processes * o.Threads);
+        if (o.AutoTune) Add(SummaryLevel.Info, "sum.speed.auto");
+        else Add(SummaryLevel.Info, o.Processes > 1 ? "sum.speed.parallel" : "sum.speed", o.Processes, o.Threads, o.Processes * o.Threads);
         Add(SummaryLevel.Info, "sum.retries", o.Retries, o.RetryWaitSeconds);
         if (!string.IsNullOrWhiteSpace(o.ExtraArguments)) Add(SummaryLevel.Warning, "sum.extra", o.ExtraArguments.Trim());
 

@@ -80,6 +80,12 @@ public sealed class CopyOptions
     public const int MaxThreads = 128;
     public const int MaxProcesses = 16;
 
+    /// <summary>
+    /// Threads and processes are computed at every run from the free CPU and RAM
+    /// (<see cref="Robocopy.AutoTune"/>); <see cref="Threads"/> and <see cref="Processes"/> are then ignored.
+    /// </summary>
+    public bool AutoTune { get; set; } = true;
+
     /// <summary>/MT:n — threads inside each robocopy process.</summary>
     public int Threads { get; set; } = 16;
 
@@ -94,6 +100,12 @@ public sealed class CopyOptions
 
     /// <summary>/J — unbuffered I/O, faster for very large files.</summary>
     public bool UnbufferedIO { get; set; }
+
+    /// <summary>
+    /// Local sources only: copy from a Volume Shadow Copy (VSS) snapshot taken when the run
+    /// starts, so files that are open or locked are copied too, as they were at that moment.
+    /// </summary>
+    public bool UseShadowCopy { get; set; } = true;
 
     /// <summary>/ZB — restartable mode, falling back to backup mode on access denied.</summary>
     public bool BackupMode { get; set; }

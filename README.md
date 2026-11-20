@@ -11,6 +11,15 @@ The interface is in Italian (default) and English.
   would write to the source are refused, both when the job is saved and when the command is
   built: `/MOV` and `/MOVE` delete the source after copying, and `/M` resets its archive
   attribute. The source access check only reads.
+- **Open files** of a local source are copied through a **Volume Shadow Copy** (VSS):
+  - At the start of a run the service takes a snapshot of the volume (`Win32_ShadowCopy`,
+    ClientAccessible) and links it as a folder under `%ProgramData%\AGS-Copy\vss`.
+  - Robocopy reads from that folder; the snapshot is deleted when the run ends.
+  - Snapshots left by a crash are removed when the service starts.
+  - If VSS fails, for example on FAT volumes or with too little space, the run copies without
+    it and ends with a warning.
+
+  Network sources cannot use VSS.
 - **Two modes**:
   - *Copy* (`/E`) never deletes anything.
   - *Mirror* (`/MIR`) deletes destination items the source no longer has. It is shown in red
@@ -20,7 +29,11 @@ The interface is in Italian (default) and English.
   bound to the service account: they never leave the service, and the GUI only learns that one
   is stored.
 - **Speed**:
-  - *Threads* `/MT:n` (1-128) inside each robocopy process.
+  - *Automatic* (default): when a run starts the service measures free CPUs, CPU load
+    and available RAM. From those it picks processes and threads (`AutoTune`): several threads
+    per free core, more over the network, up to a quarter of the free RAM. The run's history
+    records the values it used.
+  - *Threads* `/MT:n` (1-128) inside each robocopy process, when set by hand.
   - *Processes*: up to 16 robocopy processes side by side, one per top-level folder of the
     source, each with its own threads.
   - Optional `/J` for very large files.
@@ -79,28 +92,43 @@ container:
 build/docker.sh build -c Release
 build/docker.sh test tests/AgsCopy.Core.Tests
 build/publish.sh            # → publish/AGS-Copy (self-contained win-x64)
+build/installer.sh          # → publish/AGS-Copy-Setup-<version>.exe (NSIS, in a Debian container)
 ```
 
 On Windows with the SDK: `dotnet build`, `dotnet test`.
 
 ## Install
 
-1. Copy the `publish/AGS-Copy` folder to the computer.
-2. In an administrator PowerShell, run `.\install.ps1`. Add `-InstallDir` for a folder other
-   than `C:\Program Files\AGS-Copy`.
+### Setup program (recommended)
 
-The script does five things:
+Run `AGS-Copy-Setup-<version>.exe`. It asks for administrator rights, then lets you choose
+Italian or English and the folder.
 
-- installs the files;
+The setup does five things:
+
+- installs AGS-Copy in `C:\Program Files\AGS-Copy`;
 - creates and starts the `AGS-Copy` service (automatic start, restart on failure);
 - adds the tray icon to every user's logon;
 - adds the Start menu entry;
-- starts the tray for the current user.
+- adds AGS-Copy to *Apps & features*, from where it can be uninstalled.
 
-Running it again updates an existing installation and keeps the jobs.
+Running a newer setup updates the installation and keeps jobs, credentials and history. When
+AGS-Copy is uninstalled, it asks whether to delete them too; the default is to keep them.
 
-To remove AGS-Copy, run `.\uninstall.ps1` from `C:\Program Files\AGS-Copy`. Jobs and history
-are kept unless you add `-RemoveData`.
+Unattended:
+
+```bat
+AGS-Copy-Setup-0.1.0.exe /S
+AGS-Copy-Setup-0.1.0.exe /S /D=D:\Programs\AGS-Copy
+"C:\Program Files\AGS-Copy\uninstall.exe" /S
+```
+
+The silent uninstall keeps jobs, credentials and history.
+
+### PowerShell scripts
+
+`publish/AGS-Copy` also holds `install.ps1` and `uninstall.ps1`, which do the same as the setup
+without a wizard. `uninstall.ps1 -RemoveData` also deletes the jobs and history.
 
 ## Status
 
@@ -110,7 +138,6 @@ robocopy itself have not been tried on Windows yet.
 Planned next:
 
 - an email report after each run;
-- VSS snapshots for open files;
 - dated backup sets with retention;
 - scripts before and after a job;
-- an MSI installer.
+- an MSI package for Group Policy deployment (WiX builds only on Windows).

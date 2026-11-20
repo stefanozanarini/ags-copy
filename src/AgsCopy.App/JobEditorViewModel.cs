@@ -100,6 +100,7 @@ public sealed class JobEditorViewModel : ObservableObject
     private CopyMode _mode;
     private int _threads;
     private int _processes;
+    private bool _autoTune;
     private int _fileProperties;
     private int _scheduleKind;
     private DateTime? _startDate;
@@ -122,10 +123,12 @@ public sealed class JobEditorViewModel : ObservableObject
         var o = job.Options;
         _threads = o.Threads;
         _processes = o.Processes;
+        _autoTune = o.AutoTune;
         Retries = o.Retries;
         RetryWaitSeconds = o.RetryWaitSeconds;
         UnbufferedIO = o.UnbufferedIO;
         BackupMode = o.BackupMode;
+        UseShadowCopy = o.UseShadowCopy;
         ExcludeOlder = o.ExcludeOlder;
         SkipJunctions = o.SkipJunctions;
         FatFileTimes = o.FatFileTimes;
@@ -217,12 +220,22 @@ public sealed class JobEditorViewModel : ObservableObject
         }
     }
 
-    public string SpeedText => Loc.F("options.total", _threads * _processes);
+    public bool AutoTune
+    {
+        get => _autoTune;
+        set
+        {
+            if (Set(ref _autoTune, value)) OnPropertyChanged(nameof(SpeedText));
+        }
+    }
+
+    public string SpeedText => _autoTune ? Loc.T("options.auto.text") : Loc.F("options.total", _threads * _processes);
 
     public int Retries { get; set; }
     public int RetryWaitSeconds { get; set; }
     public bool UnbufferedIO { get; set; }
     public bool BackupMode { get; set; }
+    public bool UseShadowCopy { get; set; }
     public bool ExcludeOlder { get; set; }
     public bool SkipJunctions { get; set; }
     public bool FatFileTimes { get; set; }
@@ -340,10 +353,12 @@ public sealed class JobEditorViewModel : ObservableObject
         var o = job.Options;
         o.Threads = _threads;
         o.Processes = _processes;
+        o.AutoTune = _autoTune;
         o.Retries = Retries;
         o.RetryWaitSeconds = RetryWaitSeconds;
         o.UnbufferedIO = UnbufferedIO;
         o.BackupMode = BackupMode;
+        o.UseShadowCopy = UseShadowCopy;
         o.ExcludeOlder = ExcludeOlder;
         o.SkipJunctions = SkipJunctions;
         o.FatFileTimes = FatFileTimes;
