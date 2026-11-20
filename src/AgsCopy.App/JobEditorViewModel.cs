@@ -188,7 +188,6 @@ public sealed class JobEditorViewModel : ObservableObject
             if (!Set(ref _mode, value)) return;
             OnPropertyChanged(nameof(ModeCopy));
             OnPropertyChanged(nameof(ModeMirror));
-            OnPropertyChanged(nameof(ModeMove));
             OnPropertyChanged(nameof(DeletesFiles));
             DeletionConfirmed = false;
             Preview = null;
@@ -197,7 +196,6 @@ public sealed class JobEditorViewModel : ObservableObject
 
     public bool ModeCopy { get => _mode == CopyMode.Copy; set { if (value) Mode = CopyMode.Copy; } }
     public bool ModeMirror { get => _mode == CopyMode.Mirror; set { if (value) Mode = CopyMode.Mirror; } }
-    public bool ModeMove { get => _mode == CopyMode.Move; set { if (value) Mode = CopyMode.Move; } }
     public bool DeletesFiles => _mode != CopyMode.Copy;
 
     // Options

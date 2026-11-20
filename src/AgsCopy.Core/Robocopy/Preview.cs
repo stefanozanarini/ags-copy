@@ -30,13 +30,6 @@ public sealed class PreviewResult
     public long ExtraBytes { get; set; }
     public long ExtraDirs { get; set; }
 
-    /// <summary>
-    /// For Move: files deleted from the source afterwards. Robocopy may also move files that
-    /// are already identical, so this is everything in the source.
-    /// </summary>
-    public long SourceFilesToDelete { get; set; }
-    public long SourceBytesToDelete { get; set; }
-
     public long FilesUnchanged { get; set; }
     public long BytesUnchanged { get; set; }
 
@@ -130,16 +123,6 @@ public sealed class PreviewAggregator
             // The table is authoritative for totals; the lines may be fewer with /MT.
             r.FilesToCopy = Math.Max(r.FilesToCopy, s.Files.Copied);
             r.BytesToCopy = Math.Max(r.BytesToCopy, s.Bytes.Copied);
-            if (r.Mode == CopyMode.Move)
-            {
-                r.SourceFilesToDelete = s.Files.Total;
-                r.SourceBytesToDelete = s.Bytes.Total;
-            }
-        }
-        else if (r.Mode == CopyMode.Move)
-        {
-            r.SourceFilesToDelete = r.FilesToCopy;
-            r.SourceBytesToDelete = r.BytesToCopy;
         }
         return r;
     }

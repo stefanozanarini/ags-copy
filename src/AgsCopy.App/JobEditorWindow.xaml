@@ -157,6 +157,9 @@
                     <StackPanel Margin="24,18" MaxWidth="680" HorizontalAlignment="Left">
                         <TextBlock Text="{l:T step.mode}" Style="{StaticResource SectionTitle}" />
                         <TextBlock Text="{l:T mode.hint}" Style="{StaticResource Hint}" />
+                        <Border Background="{StaticResource AccentLight}" CornerRadius="4" Padding="10,6" Margin="0,0,0,10">
+                            <TextBlock Text="{l:T mode.readonly}" TextWrapping="Wrap" Foreground="{StaticResource Accent}" FontWeight="SemiBold" />
+                        </Border>
                         <Border Style="{StaticResource Card}">
                             <RadioButton GroupName="Mode" IsChecked="{Binding ModeCopy}" Style="{StaticResource ModeCard}">
                                 <StackPanel>
@@ -171,15 +174,6 @@
                                     <TextBlock Text="{l:T mode.Mirror}" FontWeight="SemiBold" FontSize="15" />
                                     <TextBlock Text="{l:T mode.Mirror.desc}" TextWrapping="Wrap" Foreground="{StaticResource Muted}" />
                                     <TextBlock Text="{l:T mode.Mirror.warn}" TextWrapping="Wrap" Foreground="{StaticResource Danger}" FontWeight="SemiBold" Margin="0,4,0,0" />
-                                </StackPanel>
-                            </RadioButton>
-                        </Border>
-                        <Border Style="{StaticResource Card}">
-                            <RadioButton GroupName="Mode" IsChecked="{Binding ModeMove}" Style="{StaticResource ModeCard}">
-                                <StackPanel>
-                                    <TextBlock Text="{l:T mode.Move}" FontWeight="SemiBold" FontSize="15" />
-                                    <TextBlock Text="{l:T mode.Move.desc}" TextWrapping="Wrap" Foreground="{StaticResource Muted}" />
-                                    <TextBlock Text="{l:T mode.Move.warn}" TextWrapping="Wrap" Foreground="{StaticResource Danger}" FontWeight="SemiBold" Margin="0,4,0,0" />
                                 </StackPanel>
                             </RadioButton>
                         </Border>

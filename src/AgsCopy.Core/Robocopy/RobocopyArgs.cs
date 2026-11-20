@@ -44,15 +44,6 @@ public static class RobocopyArgs
             case (CopyMode.Mirror, _):
                 a.Add("/MIR");
                 break;
-            case (CopyMode.Move, RobocopyPass.Root):
-                a.Add("/MOV");
-                break;
-            case (CopyMode.Move, _):
-                // /MOV moves files only; /MOVE would also delete the source folders,
-                // including the job's own source root.
-                a.Add("/E");
-                a.Add("/MOV");
-                break;
         }
 
         a.Add(o.FileProperties switch
@@ -95,10 +86,28 @@ public static class RobocopyArgs
         if (tee) a.Add("/TEE");
 
         if (!string.IsNullOrWhiteSpace(o.ExtraArguments))
+        {
+            var forbidden = SourceWritingSwitches(o.ExtraArguments);
+            if (forbidden.Count > 0)
+                throw new InvalidOperationException("Switches that modify the source are not allowed: " + string.Join(' ', forbidden));
             a.AddRange(CommandLine.Split(o.ExtraArguments));
+        }
 
         return a;
     }
+
+    /// <summary>
+    /// Robocopy switches that write to the source: /MOV and /MOVE delete it after copying,
+    /// /M clears its archive attribute. AGS-Copy only ever reads the source.
+    /// </summary>
+    private static readonly string[] SourceWriting = ["/MOV", "/MOVE", "/M"];
+
+    public static List<string> SourceWritingSwitches(string? extraArguments) =>
+        string.IsNullOrWhiteSpace(extraArguments)
+            ? []
+            : CommandLine.Split(extraArguments)
+                .Where(x => SourceWriting.Contains(x.Trim(), StringComparer.OrdinalIgnoreCase))
+                .ToList();
 
     /// <summary>Approximate command line length once quoted.</summary>
     public static int Length(IEnumerable<string> args) =>

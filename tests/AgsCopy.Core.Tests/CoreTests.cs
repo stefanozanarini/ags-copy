@@ -160,7 +160,9 @@ public class ValidationAndTextTests
                 j.Schedule = new Schedule { Kind = ScheduleKind.Weekly, DaysOfWeek = [DayOfWeek.Monday] };
                 var lines = JobDescriber.Describe(j);
                 Assert.DoesNotContain(lines, l => l.Text.Contains('['));
-                Assert.Equal(mode != CopyMode.Copy, lines.Any(l => l.Level == SummaryLevel.Danger));
+                Assert.Equal(mode == CopyMode.Mirror, lines.Any(l => l.Level == SummaryLevel.Danger));
+                // Every summary states that the source is left untouched.
+                Assert.Contains(lines, l => l.Text == Loc.F("sum.readonly", @"C:\Docs"));
             }
         }
         finally

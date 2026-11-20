@@ -33,10 +33,8 @@ public static class JobDescriber
             case CopyMode.Mirror:
                 Add(SummaryLevel.Danger, "sum.mode.mirror", dst, src);
                 break;
-            case CopyMode.Move:
-                Add(SummaryLevel.Danger, "sum.mode.move", src);
-                break;
         }
+        Add(SummaryLevel.Info, "sum.readonly", src);
 
         AddEndpoint(job.Source, "sum.net.source");
         AddEndpoint(job.Destination, "sum.net.destination");
@@ -115,9 +113,6 @@ public static class JobDescriber
         {
             Add(SummaryLevel.Info, "prev.nodelete");
         }
-
-        if (p.Mode == CopyMode.Move && p.SourceFilesToDelete > 0)
-            Add(SummaryLevel.Danger, "prev.movedelete", Fmt.Count(p.SourceFilesToDelete), Fmt.Bytes(p.SourceBytesToDelete), p.Source);
 
         if (p.ExitCode >= RobocopyExitCode.CopyFailed)
             Add(SummaryLevel.Warning, "prev.exitcode", p.ExitCode);

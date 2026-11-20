@@ -7,12 +7,14 @@ The interface is in Italian (default) and English.
   summary. A job is saved only from the **summary** step. That step describes in plain words
   what is copied, where, and what is deleted. It also runs a **simulation** (`robocopy /L`) that
   lists the files to copy and the files and folders to delete.
-- **Three modes**:
+- **The source is read-only, always.** There is no move mode. Extra robocopy arguments that
+  would write to the source are refused, both when the job is saved and when the command is
+  built: `/MOV` and `/MOVE` delete the source after copying, and `/M` resets its archive
+  attribute. The source access check only reads.
+- **Two modes**:
   - *Copy* (`/E`) never deletes anything.
-  - *Mirror* (`/MIR`) deletes destination items the source no longer has.
-  - *Move* (`/E /MOV`) deletes source files once they are copied.
-
-  Destructive modes are shown in red and need an explicit confirmation to save.
+  - *Mirror* (`/MIR`) deletes destination items the source no longer has. It is shown in red
+    and needs an explicit confirmation to save.
 - **Network paths** (`\\server\share`) with their own user and password. The service connects
   with `WNetAddConnection2` and needs no mapped drive. Passwords are encrypted with DPAPI and
   bound to the service account: they never leave the service, and the GUI only learns that one
@@ -62,8 +64,6 @@ AGS-Copy.exe --run <job id>   ──┘   JSON lines, one request per connection
     passes are copying.
   - If the command line would grow past 30,000 characters (thousands of folders), the job falls
     back to a single process.
-- **Move** uses `/MOV` and not `/MOVE`, because `/MOVE` would also delete the source folder of
-  the job.
 - **Permissions**: everyone logged on can read the status (the tray). Every other request
   (edit, run, simulate, read logs) needs an elevated administrator. The service checks this on
   the process token at the other end of the pipe.

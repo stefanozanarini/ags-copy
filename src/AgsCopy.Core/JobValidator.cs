@@ -1,4 +1,5 @@
 using AgsCopy.Core.Models;
+using AgsCopy.Core.Robocopy;
 
 namespace AgsCopy.Core;
 
@@ -27,6 +28,8 @@ public static class JobValidator
         if (o.Threads is < 1 or > CopyOptions.MaxThreads) errors.Add(Loc.Fl(lang, "val.threads", CopyOptions.MaxThreads));
         if (o.Processes is < 1 or > CopyOptions.MaxProcesses) errors.Add(Loc.Fl(lang, "val.processes", CopyOptions.MaxProcesses));
         if (o.Retries < 0 || o.RetryWaitSeconds < 0) errors.Add(T("val.retries"));
+        if (RobocopyArgs.SourceWritingSwitches(o.ExtraArguments) is { Count: > 0 } forbidden)
+            errors.Add(Loc.Fl(lang, "val.sourcewrite", string.Join(' ', forbidden)));
 
         var s = job.Schedule;
         if (s.Kind == ScheduleKind.Weekly && s.DaysOfWeek.Count == 0) errors.Add(T("val.weekdays"));

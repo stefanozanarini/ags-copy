@@ -8,8 +8,8 @@ public enum CopyMode
     Copy,
     /// <summary>Destination becomes identical to the source: extra files are deleted.</summary>
     Mirror,
-    /// <summary>Files are copied and then deleted from the source; folders stay.</summary>
-    Move,
+
+    // No "move" mode: the source is only ever read.
 }
 
 public enum FileProperties
@@ -34,7 +34,7 @@ public sealed class CopyJob
     public Schedule Schedule { get; set; } = new();
 
     /// <summary>
-    /// The user ticked "I understand files will be deleted". Required for Mirror and Move.
+    /// The user ticked "I understand files will be deleted". Required for Mirror.
     /// </summary>
     public bool DeletionConfirmed { get; set; }
 
@@ -42,7 +42,7 @@ public sealed class CopyJob
     public DateTime ModifiedUtc { get; set; } = DateTime.UtcNow;
 
     [JsonIgnore]
-    public bool DeletesFiles => Mode is CopyMode.Mirror or CopyMode.Move;
+    public bool DeletesFiles => Mode == CopyMode.Mirror;
 }
 
 public sealed class JobEndpoint

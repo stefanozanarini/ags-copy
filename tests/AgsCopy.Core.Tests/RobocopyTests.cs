@@ -107,22 +107,6 @@ public class PreviewTests
     }
 
     [Fact]
-    public void Move_preview_counts_every_source_file_as_deleted()
-    {
-        var agg = new PreviewAggregator(@"C:\Out", @"E:\In", CopyMode.Move);
-        agg.Add("\t    New File  \t\t    1000\tC:\\Out\\a.pdf");
-        agg.Add("    Dirs :          1         0         1         0         0         0");
-        agg.Add("   Files :          5         1         4         0         0         0");
-        agg.Add("   Bytes :       5000      1000      4000         0         0         0");
-        var r = agg.Complete(1);
-        Assert.Equal(1, r.FilesToCopy);
-        Assert.False(r.ExtrasDeleted);
-        Assert.Equal(5, r.SourceFilesToDelete);
-        Assert.Equal(5000, r.SourceBytesToDelete);
-        Assert.Equal(4, r.FilesUnchanged);
-    }
-
-    [Fact]
     public void Progress_counts_only_copied_source_files()
     {
         var p = new ProgressCounter(@"C:\Data");
@@ -160,14 +144,35 @@ public class RobocopyArgsTests
     }
 
     [Fact]
-    public void Mirror_and_move_flags()
+    public void No_mode_ever_writes_to_the_source()
     {
+        foreach (var mode in Enum.GetValues<CopyMode>())
+        foreach (var pass in Enum.GetValues<RobocopyPass>())
+        {
+            var a = RobocopyArgs.Build(Job(mode), @"C:\a", @"D:\b", pass, false, null, false, ["x"]);
+            Assert.DoesNotContain(a, x => x.Equals("/MOV", StringComparison.OrdinalIgnoreCase)
+                                          || x.Equals("/MOVE", StringComparison.OrdinalIgnoreCase)
+                                          || x.Equals("/M", StringComparison.OrdinalIgnoreCase));
+        }
         Assert.Contains("/MIR", RobocopyArgs.Build(Job(CopyMode.Mirror), @"C:\a", @"D:\b", RobocopyPass.Full, false, null, false));
-        var move = RobocopyArgs.Build(Job(CopyMode.Move), @"C:\a", @"D:\b", RobocopyPass.Full, false, null, false);
-        Assert.Contains("/MOV", move);
-        // /MOVE would delete the source root folder as well.
-        Assert.DoesNotContain("/MOVE", move);
     }
+
+    [Theory]
+    [InlineData("/MOV")]
+    [InlineData("/move")]
+    [InlineData("/XO /M")]
+    public void Source_writing_extra_switches_are_refused(string extra)
+    {
+        var job = Job(CopyMode.Copy);
+        job.Options.ExtraArguments = extra;
+        Assert.NotEmpty(RobocopyArgs.SourceWritingSwitches(extra));
+        Assert.Throws<InvalidOperationException>(() => RobocopyArgs.Build(job, @"C:\a", @"D:\b", RobocopyPass.Full, false, null, false));
+        Assert.Contains(JobValidator.Validate(job, "en"), e => e.Contains("source"));
+    }
+
+    [Fact]
+    public void Harmless_extra_switches_are_accepted() =>
+        Assert.Empty(RobocopyArgs.SourceWritingSwitches("/MAXAGE:30 /IPG:10 /MIN:1 /A"));
 
     [Fact]
     public void Root_pass_copies_root_files_and_excludes_the_parallel_folders()
