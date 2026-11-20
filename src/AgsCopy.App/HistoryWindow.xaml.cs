@@ -15,7 +15,8 @@ public sealed class RunRow(RunRecord r)
     public string Trigger => Loc.T("trigger." + r.Trigger);
     public string Files => Fmt.Count(r.FilesCopied);
     public string Bytes => Fmt.Bytes(r.BytesCopied);
-    public string Failed => Fmt.Count(r.FilesFailed);
+    public string Failed => Fmt.Count(Math.Max(r.FilesFailed, r.Errors));
+    public string Archived => Fmt.Count(r.VersionsArchived);
     public int ExitCode => r.ExitCode;
     public string Message => r.Message ?? "";
 }
@@ -48,7 +49,20 @@ public partial class HistoryWindow : Window
     private async void Refresh_Click(object sender, RoutedEventArgs e) => await LoadAsync();
 
     private void Runs_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
-        LogButton.IsEnabled = RunsGrid.SelectedItem is RunRow;
+        LogButton.IsEnabled = ReportButton.IsEnabled = RunsGrid.SelectedItem is RunRow;
+
+    private async void Report_Click(object sender, RoutedEventArgs e)
+    {
+        if (RunsGrid.SelectedItem is not RunRow row) return;
+        try
+        {
+            if (!await ReportViewer.OpenRunAsync(_jobId, row.Record.Id)) Ui.Error(this, Loc.T("history.noreport"));
+        }
+        catch (Exception ex)
+        {
+            Ui.Error(this, ex);
+        }
+    }
 
     private async void Log_Click(object sender, RoutedEventArgs e)
     {

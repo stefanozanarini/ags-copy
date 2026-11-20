@@ -70,6 +70,8 @@ public static class RobocopyArgs
         }
 
         var xd = o.ExcludeDirectories.Select(s => s.Trim()).Where(s => s.Length > 0).ToList();
+        // Always, even with versions turned off: a mirror must never purge the kept versions.
+        xd.Add(Versions.FolderName);
         if (pass == RobocopyPass.Root && rootExcludedDirs != null) xd.AddRange(rootExcludedDirs);
         if (xd.Count > 0)
         {

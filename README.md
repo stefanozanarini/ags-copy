@@ -20,6 +20,20 @@ The interface is in Italian (default) and English.
     it and ends with a warning.
 
   Network sources cannot use VSS.
+- **File versions** (optional, per job): before each copy, destination files that robocopy
+  would overwrite or (in Mirror) delete are moved to
+  `Destination\_AGS-Copy-Versions\<yyyy-MM-dd_HHmmss>\`, keeping their relative path.
+  - A `robocopy /L` pass decides what to move.
+  - Version folders older than the retention (days, 0 = forever) are deleted after each run.
+  - The versions folder is always excluded from robocopy, so a mirror never purges it.
+- **HTML reports**: every run writes a page to `%ProgramData%\AGS-Copy\reports\<job>\`, and
+  an `index.html` shows all jobs.
+  - A run page has outcome, duration, speed and files copied, skipped and failed. Errors are
+    listed with path, Windows code and a plain explanation. It also lists files moved to the
+    versions and items a mirror deleted.
+  - The index has, for each job, the last successful backup and the last 30 runs as coloured
+    squares linking to their pages.
+  - The GUI opens them from *Report* (main window) and *Open report* (history).
 - **Two modes**:
   - *Copy* (`/E`) never deletes anything.
   - *Mirror* (`/MIR`) deletes destination items the source no longer has. It is shown in red
@@ -42,7 +56,7 @@ The interface is in Italian (default) and English.
 - **Tray icon** for every user, unelevated. Its colour shows the state (idle, copying, failed,
   paused, service down). It shows a notification when a job ends, and its menu runs jobs and
   opens the configuration.
-- **History and logs** per job: the last 200 runs, with robocopy's full log.
+- **History and logs** per job: the last 200 runs, with robocopy's full log and report.
 
 ## Architecture
 

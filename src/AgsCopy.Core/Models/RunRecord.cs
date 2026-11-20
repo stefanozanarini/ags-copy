@@ -38,10 +38,19 @@ public sealed class RunRecord
     public long FilesExtra { get; set; }
     public long DirsExtra { get; set; }
 
+    /// <summary>Destination files and folders moved to the versions folder before the copy.</summary>
+    public long VersionsArchived { get; set; }
+
+    /// <summary>Distinct paths robocopy reported an error for.</summary>
+    public long Errors { get; set; }
+
     public string? Message { get; set; }
 
     /// <summary>File name of the log inside the job's log folder.</summary>
     public string? LogFile { get; set; }
+
+    /// <summary>File name of the HTML report inside the job's report folder.</summary>
+    public string? ReportFile { get; set; }
 
     public TimeSpan Duration => (EndUtc ?? DateTime.UtcNow) - StartUtc;
 }

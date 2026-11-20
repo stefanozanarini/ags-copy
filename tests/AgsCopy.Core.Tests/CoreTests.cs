@@ -197,7 +197,7 @@ public class LocalizationTests
     {
         var root = RepoRoot();
         var used = new HashSet<string>();
-        var literal = new Regex("\"((?:val|sum|sched|prev|preview|err|test|log|tray|main|editor|endpoint|general|source|destination|mode|options|props|kind|schedule|summary|step|history|col|outcome|trigger|run)\\.[A-Za-z0-9_.]*[A-Za-z0-9_])\"");
+        var literal = new Regex("\"((?:rep|val|sum|sched|prev|preview|err|test|log|tray|main|editor|endpoint|general|source|destination|mode|options|props|kind|schedule|summary|step|history|col|outcome|trigger|run)\\.[A-Za-z0-9_.]*[A-Za-z0-9_])\"");
         var markup = new Regex(@"\{l:T ([A-Za-z0-9_.]+)\}");
         foreach (var file in Directory.EnumerateFiles(Path.Combine(root, "src"), "*.*", SearchOption.AllDirectories))
         {
@@ -213,6 +213,8 @@ public class LocalizationTests
         used.UnionWith(Enum.GetNames<RunOutcome>().Select(n => "outcome." + n));
         used.UnionWith(Enum.GetNames<RunTrigger>().Select(n => "trigger." + n));
         used.UnionWith(Enum.GetNames<FileProperties>().Select(n => "sum.props." + n));
+        used.UnionWith(Enum.GetNames<VersionReason>().Select(n => "rep.reason." + n));
+        used.UnionWith(new[] { 2, 3, 5, 32, 33, 53, 64, 67, 112, 121, 1219, 1326 }.Select(c => "rep.err." + c));
 
         var it = Loc.Table("it");
         Assert.True(used.Count > 100, "the scan found too few keys: " + used.Count);

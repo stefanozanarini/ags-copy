@@ -8,13 +8,14 @@
     <DockPanel>
         <Border DockPanel.Dock="Bottom" Background="{StaticResource Surface}" BorderBrush="{StaticResource Border}" BorderThickness="0,1,0,0" Padding="12,8">
             <StackPanel Orientation="Horizontal">
-                <Button x:Name="LogButton" Content="{l:T history.log}" Style="{StaticResource PrimaryButton}" Click="Log_Click" IsEnabled="False" />
+                <Button x:Name="ReportButton" Content="{l:T history.report}" Style="{StaticResource PrimaryButton}" Click="Report_Click" IsEnabled="False" />
+                <Button x:Name="LogButton" Content="{l:T history.log}" Click="Log_Click" IsEnabled="False" />
                 <Button Content="{l:T history.refresh}" Click="Refresh_Click" />
             </StackPanel>
         </Border>
         <DataGrid x:Name="RunsGrid" AutoGenerateColumns="False" IsReadOnly="True" SelectionMode="Single" HeadersVisibility="Column"
                   GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="#EEF0F3" BorderThickness="0" RowHeight="28"
-                  SelectionChanged="Runs_SelectionChanged" MouseDoubleClick="Log_Click">
+                  SelectionChanged="Runs_SelectionChanged" MouseDoubleClick="Report_Click">
             <DataGrid.Columns>
                 <DataGridTextColumn Header="{l:T history.start}" Binding="{Binding Start}" Width="140" />
                 <DataGridTextColumn Header="{l:T history.duration}" Binding="{Binding Duration}" Width="80" />
@@ -43,6 +44,7 @@
                 <DataGridTextColumn Header="{l:T history.files}" Binding="{Binding Files}" Width="90" />
                 <DataGridTextColumn Header="{l:T history.bytes}" Binding="{Binding Bytes}" Width="90" />
                 <DataGridTextColumn Header="{l:T history.failed}" Binding="{Binding Failed}" Width="70" />
+                <DataGridTextColumn Header="{l:T rep.archived}" Binding="{Binding Archived}" Width="80" />
                 <DataGridTextColumn Header="{l:T history.code}" Binding="{Binding ExitCode}" Width="60" />
                 <DataGridTextColumn Header="{l:T history.message}" Binding="{Binding Message}" Width="*" />
             </DataGrid.Columns>

@@ -7,6 +7,9 @@ public sealed class ServiceSettings
 {
     public bool SchedulerPaused { get; set; }
 
+    /// <summary>Language of reports and run notes: the last one an administrator used in the GUI.</summary>
+    public string Language { get; set; } = "it";
+
     public static ServiceSettings Load()
     {
         try

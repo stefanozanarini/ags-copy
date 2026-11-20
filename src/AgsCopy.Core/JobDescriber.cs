@@ -30,9 +30,18 @@ public static class JobDescriber
             case CopyMode.Copy:
                 Add(SummaryLevel.Info, "sum.mode.copy");
                 break;
+            case CopyMode.Mirror when job.Options.KeepVersions:
+                Add(SummaryLevel.Danger, "sum.mode.mirror.versions", dst, src);
+                break;
             case CopyMode.Mirror:
                 Add(SummaryLevel.Danger, "sum.mode.mirror", dst, src);
                 break;
+        }
+        if (job.Options.KeepVersions)
+        {
+            var folder = Versions.Root(dst) + "\\";
+            if (job.Options.VersionRetentionDays > 0) Add(SummaryLevel.Info, "sum.versions", folder, job.Options.VersionRetentionDays);
+            else Add(SummaryLevel.Info, "sum.versions.forever", folder);
         }
         Add(SummaryLevel.Info, "sum.readonly", src);
         if (job.Options.UseShadowCopy)
@@ -114,7 +123,9 @@ public static class JobDescriber
         var extras = p.ExtraFiles + p.ExtraDirs;
         if (extras > 0)
         {
-            if (p.ExtrasDeleted)
+            if (p.ExtrasDeleted && p.KeepVersions)
+                Add(SummaryLevel.Warning, "prev.delete.versions", Fmt.Count(p.ExtraFiles), Fmt.Bytes(p.ExtraBytes), Fmt.Count(p.ExtraDirs), Versions.Root(p.Destination));
+            else if (p.ExtrasDeleted)
                 Add(SummaryLevel.Danger, "prev.delete", Fmt.Count(p.ExtraFiles), Fmt.Bytes(p.ExtraBytes), Fmt.Count(p.ExtraDirs), p.Destination);
             else
                 Add(SummaryLevel.Info, "prev.extrakept", Fmt.Count(p.ExtraFiles), Fmt.Count(p.ExtraDirs));

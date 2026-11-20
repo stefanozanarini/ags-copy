@@ -31,6 +31,9 @@ public static class JobValidator
         if (RobocopyArgs.SourceWritingSwitches(o.ExtraArguments) is { Count: > 0 } forbidden)
             errors.Add(Loc.Fl(lang, "val.sourcewrite", string.Join(' ', forbidden)));
 
+        if (o.KeepVersions && o.VersionRetentionDays is < 0 or > Versions.MaxRetentionDays)
+            errors.Add(Loc.Fl(lang, "val.retention", Versions.MaxRetentionDays));
+
         var s = job.Schedule;
         if (s.Kind == ScheduleKind.Weekly && s.DaysOfWeek.Count == 0) errors.Add(T("val.weekdays"));
         if (s.Kind == ScheduleKind.Monthly && s.DayOfMonth is < 1 or > 31) errors.Add(T("val.dayofmonth"));

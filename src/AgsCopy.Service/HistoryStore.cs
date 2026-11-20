@@ -63,6 +63,7 @@ public sealed class HistoryStore
                 var old = runs[^1];
                 runs.RemoveAt(runs.Count - 1);
                 if (old.LogFile != null) TryDelete(Path.Combine(AppPaths.JobLogDir(old.JobId), old.LogFile));
+                if (old.ReportFile != null) TryDelete(Path.Combine(AppPaths.JobReportDir(old.JobId), old.ReportFile));
             }
             Write(record.JobId, runs);
         }

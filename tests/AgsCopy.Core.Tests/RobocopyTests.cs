@@ -182,7 +182,7 @@ public class RobocopyArgsTests
         var a = RobocopyArgs.Build(job, @"C:\a", @"D:\b", RobocopyPass.Root, false, null, false, ["One", "Two"]);
         Assert.DoesNotContain("/E", a);
         var xd = a.IndexOf("/XD");
-        Assert.Equal(["Temp", "One", "Two"], a.Skip(xd + 1).Take(3));
+        Assert.Equal(["Temp", Versions.FolderName, "One", "Two"], a.Skip(xd + 1).Take(4));
     }
 
     [Fact]

@@ -28,6 +28,7 @@ internal static class DataDirectory
 
         Directory.CreateDirectory(AppPaths.HistoryDir);
         Directory.CreateDirectory(AppPaths.LogsDir);
+        Directory.CreateDirectory(AppPaths.ReportsDir);
         Directory.CreateDirectory(AppPaths.TempDir);
         foreach (var f in Directory.EnumerateFiles(AppPaths.TempDir))
         {

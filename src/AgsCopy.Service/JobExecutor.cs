@@ -7,6 +7,7 @@ using AgsCopy.Core;
 using AgsCopy.Core.Credentials;
 using AgsCopy.Core.Ipc;
 using AgsCopy.Core.Models;
+using AgsCopy.Core.Reports;
 using AgsCopy.Core.Robocopy;
 
 namespace AgsCopy.Service;
@@ -30,7 +31,7 @@ public sealed class RunningJob
 }
 
 /// <summary>Runs, previews and checks jobs.</summary>
-public sealed class JobExecutor(HistoryStore history, ILogger<JobExecutor> log) : IHostedService
+public sealed class JobExecutor(HistoryStore history, ReportStore reports, ServiceSettings settings, ILogger<JobExecutor> log) : IHostedService
 {
     private const int MaxExtraEntriesCounted = 200_000;
     private const long MaxLogBytes = 4 * 1024 * 1024;
@@ -75,22 +76,26 @@ public sealed class JobExecutor(HistoryStore history, ILogger<JobExecutor> log) 
     {
         var record = rj.Record;
         var ct = rj.Cancel.Token;
+        var lang = settings.Language;
         var logDir = AppPaths.JobLogDir(job.Id);
         Directory.CreateDirectory(logDir);
-        var stamp = record.StartUtc.ToLocalTime().ToString("yyyyMMdd-HHmmss");
+        var startLocal = record.StartUtc.ToLocalTime();
+        var stamp = startLocal.ToString("yyyyMMdd-HHmmss");
         record.LogFile = stamp + ".log";
         history.Put(record);
         log.LogInformation("Job {Name} started ({Trigger})", job.Name, record.Trigger);
 
         var src = PathUtil.NormalizeDir(job.Source.Path);
+        var dst = PathUtil.NormalizeDir(job.Destination.Path);
         var parts = new List<(string Label, string Command, string File)>();
         var leases = new List<NetworkShare.Lease>();
         var notes = new List<string>();
+        var versions = new ArchiveResult();
         ShadowCopy? snapshot = null;
         try
         {
             leases.AddRange(Connect(job, null, null));
-            if (!Directory.Exists(src)) throw new ServiceException(Loc.Fl(null, "err.nosource", src));
+            if (!Directory.Exists(src)) throw new ServiceException(Loc.Fl(lang, "err.nosource", src));
 
             // From here on runJob reads the source from the snapshot, when there is one.
             var runJob = job;
@@ -100,14 +105,14 @@ public sealed class JobExecutor(HistoryStore history, ILogger<JobExecutor> log) 
                 {
                     snapshot = await ShadowCopy.CreateAsync(src, record.Id, ct);
                     runJob = SnapshotPaths.ForSnapshot(job, snapshot.VolumeRoot, snapshot.LinkPath);
-                    notes.Add(Loc.Fl(null, "run.vss", snapshot.VolumeRoot, runJob.Source.Path));
+                    notes.Add(Loc.Fl(lang, "run.vss", snapshot.VolumeRoot, runJob.Source.Path));
                     log.LogInformation("Job {Name}: shadow copy {Id} of {Volume}", job.Name, snapshot.ShadowId, snapshot.VolumeRoot);
                 }
                 catch (Exception e) when (e is ShadowCopyException or ManagementException or Win32Exception or UnauthorizedAccessException or IOException)
                 {
                     // Copy anyway: everything but the open files still gets copied.
                     rj.ShadowCopyFailed = true;
-                    notes.Add(Loc.Fl(null, "run.vss.failed", e.Message));
+                    notes.Add(Loc.Fl(lang, "run.vss.failed", e.Message));
                     log.LogWarning(e, "Job {Name}: shadow copy failed, copying without it", job.Name);
                 }
             }
@@ -120,9 +125,17 @@ public sealed class JobExecutor(HistoryStore history, ILogger<JobExecutor> log) 
                 runJob = Json.Clone(runJob);
                 runJob.Options.Processes = tune.Processes;
                 runJob.Options.Threads = tune.Threads;
-                notes.Add(DescribeTune(tune));
+                notes.Add(DescribeTune(tune, lang));
                 log.LogInformation("Job {Name}: auto-tuned to {Processes} processes x {Threads} threads", job.Name, tune.Processes, tune.Threads);
             }
+
+            if (job.Options.KeepVersions && Directory.Exists(dst))
+            {
+                versions = await ArchiveVersionsAsync(runJob, src, dst, startLocal, ct);
+                record.VersionsArchived = versions.Count;
+                if (versions.Count > 0) notes.Add(Loc.Fl(lang, "run.versions", Fmt.Count(versions.Count, Loc.CultureOf(lang)), versions.Folder));
+            }
+
             var tasks = ParallelPlan.Build(runJob, names);
             var consoleSource = RobocopyProcess.AsConsoleText(src);
             var combined = 0;
@@ -162,9 +175,17 @@ public sealed class JobExecutor(HistoryStore history, ILogger<JobExecutor> log) 
             record.FilesFailed = total.Files.Failed;
             record.FilesExtra = total.Files.Extras;
             record.DirsExtra = total.Dirs.Extras;
-            if (tasks.Count > 1) notes.Add(Loc.Fl(null, "run.parallel", tasks.Count));
-            // Without the snapshot, open files may have been skipped: never report a clean success.
-            if (rj.ShadowCopyFailed && record.Outcome == RunOutcome.Success) record.Outcome = RunOutcome.Warning;
+            if (tasks.Count > 1) notes.Add(Loc.Fl(lang, "run.parallel", tasks.Count));
+
+            if (job.Options.KeepVersions)
+            {
+                versions.FoldersRemoved = RemoveExpiredVersions(dst, job.Options.VersionRetentionDays);
+                if (versions.FoldersRemoved > 0) notes.Add(Loc.Fl(lang, "run.versions.removed", versions.FoldersRemoved, job.Options.VersionRetentionDays));
+            }
+
+            // Without the snapshot open files may be missing, and a file that could not be
+            // archived may have been overwritten: never report a clean success then.
+            if ((rj.ShadowCopyFailed || versions.Errors.Count > 0) && record.Outcome == RunOutcome.Success) record.Outcome = RunOutcome.Warning;
         }
         catch (OperationCanceledException)
         {
@@ -193,15 +214,49 @@ public sealed class JobExecutor(HistoryStore history, ILogger<JobExecutor> log) 
             if (notes.Count > 0) record.Message = string.Join(" ", notes);
             record.EndUtc = DateTime.UtcNow;
             if (record.Outcome == RunOutcome.Running) record.Outcome = RunOutcome.Failed;
+
+            var found = new LogFindings(dst, job.Mode == CopyMode.Mirror && !job.Options.KeepVersions);
             try
             {
-                MergeLogs(Path.Combine(logDir, record.LogFile), job, record, parts);
+                MergeLogs(Path.Combine(logDir, record.LogFile), job, record, parts, found);
             }
             catch (IOException e)
             {
                 log.LogWarning(e, "Cannot write the log of job {Name}", job.Name);
             }
+
+            try
+            {
+                var errors = versions.Errors.Concat(found.Errors.Errors).ToList();
+                record.Errors = versions.Errors.Count + found.Errors.Count;
+                record.ReportFile = reports.WriteRun(job.Id, stamp, new RunReport
+                {
+                    JobName = job.Name,
+                    Source = job.Source.Path,
+                    Destination = job.Destination.Path,
+                    Mode = job.Mode,
+                    Record = record,
+                    Notes = notes,
+                    Errors = errors,
+                    ErrorCount = (int)record.Errors,
+                    KeepVersions = job.Options.KeepVersions,
+                    RetentionDays = job.Options.VersionRetentionDays,
+                    VersionsFolder = versions.Folder ?? Versions.Root(dst),
+                    Archived = versions.Moved,
+                    ArchivedCount = versions.Count,
+                    VersionFoldersRemoved = versions.FoldersRemoved,
+                    Deleted = found.Deleted,
+                    DeletedCount = found.DeletedCount,
+                    LogFile = record.LogFile,
+                }, lang);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                log.LogWarning(e, "Cannot write the report of job {Name}", job.Name);
+            }
+
             history.Put(record);
+            reports.RebuildIndex();
             _running.TryRemove(job.Id, out _);
             _tasks.TryRemove(job.Id, out _);
             rj.Cancel.Dispose();
@@ -209,10 +264,86 @@ public sealed class JobExecutor(HistoryStore history, ILogger<JobExecutor> log) 
         }
     }
 
+    private sealed class ArchiveResult
+    {
+        public string? Folder { get; set; }
+        public long Count { get; set; }
+        public List<VersionMove> Moved { get; } = [];
+        public List<CopyError> Errors { get; } = [];
+        public int FoldersRemoved { get; set; }
+    }
+
+    /// <summary>
+    /// Moves what the copy is about to overwrite or (mirror) delete in the destination into
+    /// this run's versions folder. Robocopy /L tells what that is; nothing in the source moves.
+    /// </summary>
+    private async Task<ArchiveResult> ArchiveVersionsAsync(CopyJob runJob, string src, string dst, DateTime startLocal, CancellationToken ct)
+    {
+        var result = new ArchiveResult { Folder = Versions.RunFolder(dst, startLocal) };
+        var listFile = Path.Combine(AppPaths.TempDir, $"versions-{Guid.NewGuid():N}.log");
+        try
+        {
+            var args = RobocopyArgs.Build(runJob, src, dst, RobocopyPass.Full, true, listFile, false);
+            await RobocopyProcess.RunAsync(args, null, ct);
+            if (!File.Exists(listFile)) return result;
+
+            foreach (var m in Versions.Plan(File.ReadLines(listFile), src, dst, runJob.Mode))
+            {
+                ct.ThrowIfCancellationRequested();
+                var target = PathUtil.Combine(result.Folder, m.RelativePath);
+                try
+                {
+                    if (m.IsDirectory ? !Directory.Exists(m.DestinationPath) : !File.Exists(m.DestinationPath)) continue; // a new file
+                    Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                    if (m.IsDirectory) Directory.Move(m.DestinationPath, target);
+                    else File.Move(m.DestinationPath, target);
+                    result.Count++;
+                    if (result.Moved.Count < RunReport.MaxListedItems) result.Moved.Add(m);
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                {
+                    if (result.Errors.Count < ErrorCollector.MaxErrors)
+                        result.Errors.Add(new CopyError(m.DestinationPath, e.HResult & 0xFFFF, "→ " + Versions.FolderName, e.Message));
+                }
+            }
+            return result;
+        }
+        finally
+        {
+            try { File.Delete(listFile); } catch (IOException) { }
+        }
+    }
+
+    /// <summary>Deletes version folders older than the retention; returns how many.</summary>
+    private int RemoveExpiredVersions(string dst, int retentionDays)
+    {
+        var root = new DirectoryInfo(Versions.Root(dst));
+        if (!root.Exists || root.Attributes.HasFlag(FileAttributes.ReparsePoint)) return 0;
+        var removed = 0;
+        var names = root.EnumerateDirectories().Where(d => !d.Attributes.HasFlag(FileAttributes.ReparsePoint)).Select(d => d.Name).ToList();
+        foreach (var name in Versions.Expired(names, DateTime.Now, retentionDays))
+        {
+            var dir = Path.Combine(root.FullName, name);
+            try
+            {
+                // Copies keep the read-only attribute, which would stop the delete.
+                foreach (var f in new DirectoryInfo(dir).EnumerateFiles("*", new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint }))
+                    if (f.IsReadOnly) f.IsReadOnly = false;
+                Directory.Delete(dir, recursive: true);
+                removed++;
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                log.LogWarning(e, "Cannot delete the old versions in {Dir}", dir);
+            }
+        }
+        return removed;
+    }
+
     private static bool IsNetwork(CopyJob job) => job.Source.IsNetwork || job.Destination.IsNetwork;
 
-    private static string DescribeTune(TuneResult t) =>
-        Loc.Fl(null, "run.auto", t.Processes, t.Threads, t.Resources.LogicalCores, (int)Math.Round(t.Resources.CpuLoad * 100), Fmt.Bytes(t.Resources.AvailableRamBytes, Loc.CultureOf(null)));
+    private static string DescribeTune(TuneResult t, string? lang) =>
+        Loc.Fl(lang, "run.auto", t.Processes, t.Threads, t.Resources.LogicalCores, (int)Math.Round(t.Resources.CpuLoad * 100), Fmt.Bytes(t.Resources.AvailableRamBytes, Loc.CultureOf(lang)));
 
     /// <summary>
     /// Runs robocopy /L over the whole tree and reports what a real run would copy and delete.
@@ -235,6 +366,7 @@ public sealed class JobExecutor(HistoryStore history, ILogger<JobExecutor> log) 
                 return result;
             }
             result.DestinationExists = Directory.Exists(dst);
+            result.KeepVersions = job.Options.KeepVersions;
 
             if (job.Options.AutoTune)
             {
@@ -389,8 +521,26 @@ public sealed class JobExecutor(HistoryStore history, ILogger<JobExecutor> log) 
             .Select(d => d.Name)
             .ToList();
 
+    /// <summary>What the report needs from the run's log: errors and, for a mirror, what it deleted.</summary>
+    private sealed class LogFindings(string destination, bool collectDeleted)
+    {
+        private readonly string _destination = PathUtil.WithSlash(destination);
+
+        public ErrorCollector Errors { get; } = new();
+        public List<string> Deleted { get; } = [];
+        public long DeletedCount { get; private set; }
+
+        public void Add(string line)
+        {
+            Errors.Add(line);
+            if (!collectDeleted || RobocopyOutput.ParseLine(line) is not { } l || !PathUtil.IsUnder(l.Path, _destination)) return;
+            DeletedCount++;
+            if (Deleted.Count < RunReport.MaxListedItems) Deleted.Add(l.Path);
+        }
+    }
+
     /// <summary>Joins the per-process Unicode logs into one UTF-8 log and removes them.</summary>
-    private static void MergeLogs(string target, CopyJob job, RunRecord record, List<(string Label, string Command, string File)> parts)
+    private static void MergeLogs(string target, CopyJob job, RunRecord record, List<(string Label, string Command, string File)> parts, LogFindings found)
     {
         using var w = new StreamWriter(target, false, new UTF8Encoding(true));
         w.WriteLine($"AGS-Copy — {job.Name}");
@@ -408,8 +558,13 @@ public sealed class JobExecutor(HistoryStore history, ILogger<JobExecutor> log) 
             using (var r = new StreamReader(file, Encoding.Unicode, detectEncodingFromByteOrderMarks: true))
             {
                 string? line;
-                while ((line = r.ReadLine()) != null) w.WriteLine(line);
+                while ((line = r.ReadLine()) != null)
+                {
+                    w.WriteLine(line);
+                    found.Add(line);
+                }
             }
+            found.Errors.Complete();
             File.Delete(file);
         }
     }

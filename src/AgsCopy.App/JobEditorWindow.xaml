@@ -248,6 +248,19 @@
 
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
+                                <TextBlock Text="{l:T options.versions}" FontWeight="SemiBold" FontSize="15" />
+                                <CheckBox x:Name="VersionsBox" Content="{l:T options.versions.keep}" IsChecked="{Binding KeepVersions}" Margin="0,10,0,0" FontWeight="SemiBold" />
+                                <TextBlock Text="{l:T options.versions.hint}" Style="{StaticResource Hint}" Margin="20,2,0,4" />
+                                <StackPanel Orientation="Horizontal" Margin="20,0,0,0" IsEnabled="{Binding IsChecked, ElementName=VersionsBox}">
+                                    <TextBlock Text="{l:T options.versions.days}" VerticalAlignment="Center" />
+                                    <TextBox Text="{Binding VersionRetentionDays}" Width="60" Margin="8,0,8,0" />
+                                    <TextBlock Text="{l:T options.versions.days.hint}" VerticalAlignment="Center" Foreground="{StaticResource Muted}" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
                                 <TextBlock Text="{l:T options.errors}" FontWeight="SemiBold" FontSize="15" />
                                 <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                                     <TextBlock Text="{l:T options.retries}" VerticalAlignment="Center" />

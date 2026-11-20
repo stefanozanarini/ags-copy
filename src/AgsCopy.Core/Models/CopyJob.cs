@@ -107,6 +107,15 @@ public sealed class CopyOptions
     /// </summary>
     public bool UseShadowCopy { get; set; } = true;
 
+    /// <summary>
+    /// Before a run, destination files about to be overwritten or deleted are moved to
+    /// Destination\_AGS-Copy-Versions\&lt;date&gt;\ (see <see cref="Versions"/>).
+    /// </summary>
+    public bool KeepVersions { get; set; }
+
+    /// <summary>Version folders older than this are deleted after each run.</summary>
+    public int VersionRetentionDays { get; set; } = 30;
+
     /// <summary>/ZB — restartable mode, falling back to backup mode on access denied.</summary>
     public bool BackupMode { get; set; }
 

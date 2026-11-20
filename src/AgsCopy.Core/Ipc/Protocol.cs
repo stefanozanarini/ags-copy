@@ -29,6 +29,8 @@ public static class Commands
     public const string ReadLog = "log.read";
     public const string TestPath = "path.test";
     public const string PauseScheduler = "scheduler.pause";
+    public const string RunReport = "report.run";
+    public const string ReportBundle = "report.bundle";
 
     public static bool IsReadOnly(string command) => command is Status or ListJobs or History;
 }
@@ -76,6 +78,17 @@ public sealed class LogRequest
 {
     public Guid JobId { get; set; }
     public Guid RunId { get; set; }
+}
+
+public sealed class ReportResponse
+{
+    public string? Html { get; set; }
+}
+
+public sealed class ReportBundleResponse
+{
+    /// <summary>Relative path (index.html, &lt;job&gt;/&lt;run&gt;.html) → page.</summary>
+    public Dictionary<string, string> Files { get; set; } = [];
 }
 
 public sealed class LogResponse

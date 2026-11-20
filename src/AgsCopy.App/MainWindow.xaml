@@ -44,6 +44,7 @@
                 <Button x:Name="RunButton" Content="{l:T main.run}" Click="Run_Click" />
                 <Button x:Name="StopButton" Content="{l:T main.stop}" Click="Stop_Click" />
                 <Button x:Name="HistoryButton" Content="{l:T main.history}" Click="History_Click" />
+                <Button x:Name="ReportButton" Content="{l:T main.report}" Click="Report_Click" />
                 <Separator Margin="6,0,12,0" />
                 <ToggleButton x:Name="PauseButton" Content="{l:T main.pause}" Padding="12,5" Click="Pause_Click" />
             </WrapPanel>

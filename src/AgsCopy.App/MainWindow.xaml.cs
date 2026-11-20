@@ -88,7 +88,7 @@ public partial class MainWindow : Window
         RunButton.IsEnabled = _online && sel is { Running: false };
         StopButton.IsEnabled = _online && sel is { Running: true };
         HistoryButton.IsEnabled = _online && sel != null;
-        PauseButton.IsEnabled = _online;
+        PauseButton.IsEnabled = ReportButton.IsEnabled = _online;
     }
 
     private void Jobs_SelectionChanged(object sender, SelectionChangedEventArgs e) => UpdateButtons();
@@ -161,6 +161,18 @@ public partial class MainWindow : Window
     private void History_Click(object sender, RoutedEventArgs e)
     {
         if (Selected is { } row) new HistoryWindow(row.Id, row.Name) { Owner = this }.Show();
+    }
+
+    private async void Report_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            await ReportViewer.OpenIndexAsync();
+        }
+        catch (Exception ex)
+        {
+            Ui.Error(this, ex);
+        }
     }
 
     private async void Pause_Click(object sender, RoutedEventArgs e) =>

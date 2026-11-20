@@ -16,6 +16,10 @@ public static class AppPaths
 
     public static string JobLogDir(Guid jobId) => Path.Combine(LogsDir, jobId.ToString("N"));
 
+    public static string ReportsDir => Path.Combine(DataDir, "reports");
+
+    public static string JobReportDir(Guid jobId) => Path.Combine(ReportsDir, jobId.ToString("N"));
+
     /// <summary>%AppData%\AGS-Copy — per-user GUI settings.</summary>
     public static string UserDir =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "AGS-Copy");

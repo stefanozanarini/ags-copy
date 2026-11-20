@@ -46,6 +46,9 @@ public sealed class PreviewResult
     /// <summary>The robocopy command of the real run, for the curious.</summary>
     public string? CommandLine { get; set; }
 
+    /// <summary>Extras and overwritten files go to the versions folder first.</summary>
+    public bool KeepVersions { get; set; }
+
     /// <summary>Extras are deleted only in Mirror mode.</summary>
     public bool ExtrasDeleted => Mode == CopyMode.Mirror;
 }

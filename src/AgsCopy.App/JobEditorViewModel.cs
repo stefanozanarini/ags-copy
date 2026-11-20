@@ -129,6 +129,8 @@ public sealed class JobEditorViewModel : ObservableObject
         UnbufferedIO = o.UnbufferedIO;
         BackupMode = o.BackupMode;
         UseShadowCopy = o.UseShadowCopy;
+        KeepVersions = o.KeepVersions;
+        VersionRetentionDays = o.VersionRetentionDays;
         ExcludeOlder = o.ExcludeOlder;
         SkipJunctions = o.SkipJunctions;
         FatFileTimes = o.FatFileTimes;
@@ -236,6 +238,8 @@ public sealed class JobEditorViewModel : ObservableObject
     public bool UnbufferedIO { get; set; }
     public bool BackupMode { get; set; }
     public bool UseShadowCopy { get; set; }
+    public bool KeepVersions { get; set; }
+    public int VersionRetentionDays { get; set; }
     public bool ExcludeOlder { get; set; }
     public bool SkipJunctions { get; set; }
     public bool FatFileTimes { get; set; }
@@ -323,7 +327,7 @@ public sealed class JobEditorViewModel : ObservableObject
     public IEnumerable<PreviewItemRow> CopyItems => _preview?.CopyItems.Select(i => new PreviewItemRow(i)) ?? [];
 
     public string ExtraItemsTitle => _preview == null ? "" :
-        Loc.F(_preview.ExtrasDeleted ? "preview.deletelist" : "preview.extralist", Fmt.Count(_preview.ExtraItems.Count))
+        Loc.F(!_preview.ExtrasDeleted ? "preview.extralist" : _preview.KeepVersions ? "preview.versionlist" : "preview.deletelist", Fmt.Count(_preview.ExtraItems.Count))
         + (_preview.ExtraItemsTruncated ? " " + Loc.T("preview.truncated") : "");
 
     public string CopyItemsTitle => _preview == null ? "" :
@@ -359,6 +363,8 @@ public sealed class JobEditorViewModel : ObservableObject
         o.UnbufferedIO = UnbufferedIO;
         o.BackupMode = BackupMode;
         o.UseShadowCopy = UseShadowCopy;
+        o.KeepVersions = KeepVersions;
+        o.VersionRetentionDays = VersionRetentionDays;
         o.ExcludeOlder = ExcludeOlder;
         o.SkipJunctions = SkipJunctions;
         o.FatFileTimes = FatFileTimes;

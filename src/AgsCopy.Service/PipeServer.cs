@@ -17,6 +17,8 @@ namespace AgsCopy.Service;
 public sealed class PipeServer(
     JobStore store,
     HistoryStore history,
+    ReportStore reports,
+    ServiceSettings settings,
     JobExecutor executor,
     Scheduler scheduler,
     ILogger<PipeServer> log) : BackgroundService
@@ -79,8 +81,11 @@ public sealed class PipeServer(
             if (line == null) return;
             var request = JsonSerializer.Deserialize<PipeRequest>(line, Json.Options) ?? throw new ServiceException("Invalid request");
 
-            if (!Commands.IsReadOnly(request.Command) && !ClientIsAdministrator(server))
-                throw new ServiceException(Loc.Tl(request.Lang, "err.admin"));
+            if (!Commands.IsReadOnly(request.Command))
+            {
+                if (!ClientIsAdministrator(server)) throw new ServiceException(Loc.Tl(request.Lang, "err.admin"));
+                RememberLanguage(request.Lang);
+            }
 
             var payload = await DispatchAsync(request, ct);
             response.Ok = true;
@@ -147,6 +152,7 @@ public sealed class PipeServer(
                 executor.Cancel(id);
                 store.Delete(id);
                 history.DeleteJob(id);
+                reports.DeleteJob(id);
                 return null;
             }
 
@@ -177,6 +183,15 @@ public sealed class PipeServer(
                 return executor.TestPath(r, store.Get(r.JobId), lang);
             }
 
+            case Commands.RunReport:
+            {
+                var r = P<LogRequest>();
+                return new ReportResponse { Html = reports.ReadRun(r.JobId, r.RunId) };
+            }
+
+            case Commands.ReportBundle:
+                return new ReportBundleResponse { Files = reports.Bundle() };
+
             case Commands.PauseScheduler:
                 scheduler.Paused = P<BoolRequest>().Value;
                 return null;
@@ -184,6 +199,18 @@ public sealed class PipeServer(
             default:
                 throw new ServiceException("Unknown command: " + req.Command);
         }
+    }
+
+    /// <summary>Reports are written in the language the administrators use.</summary>
+    private void RememberLanguage(string? lang)
+    {
+        if (lang == null || !Loc.Languages.Contains(lang) || lang == settings.Language) return;
+        lock (settings)
+        {
+            settings.Language = lang;
+            settings.Save();
+        }
+        reports.RebuildIndex();
     }
 
     private ServiceStatus Status()
