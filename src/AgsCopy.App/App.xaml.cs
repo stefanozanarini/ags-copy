@@ -7,6 +7,7 @@ namespace AgsCopy.App;
 /// AGS-Copy.exe            configuration window (relaunches itself elevated)
 /// AGS-Copy.exe --tray     tray icon, unelevated, started at logon
 /// AGS-Copy.exe --run ID   asks the service to run a job now, then exits
+/// The portable build only has the configuration window, with the engine inside it.
 /// </summary>
 public partial class App : Application
 {
@@ -18,6 +19,12 @@ public partial class App : Application
         base.OnStartup(e);
         UserSettings.Load();
         var args = e.Args;
+
+        if (PortableBuild)
+        {
+            StartPortable(args);
+            return;
+        }
 
         if (args.Contains("--tray", StringComparer.OrdinalIgnoreCase))
         {
@@ -44,12 +51,43 @@ public partial class App : Application
         ShowMainWindow();
     }
 
+    /// <summary>Set by <c>dotnet publish -p:AgsPortable=true</c>.</summary>
+    private static readonly bool PortableBuild =
+#if PORTABLE
+        true;
+#else
+        false;
+#endif
+
+    private void StartPortable(string[] args)
+    {
+        if (!Elevation.IsElevated)
+        {
+            Elevation.StartElevated(args);
+            Shutdown();
+            return;
+        }
+        if (!SingleInstance("Portable")) return;
+        try
+        {
+            PortableEngine.Start();
+        }
+        catch (Exception ex)
+        {
+            Ui.Error(null, ex);
+            Shutdown();
+            return;
+        }
+        ShowMainWindow();
+    }
+
     public void ShowMainWindow()
     {
         var old = MainWindow;
         MainWindow = new MainWindow();
         ShutdownMode = ShutdownMode.OnMainWindowClose;
         MainWindow.Show();
+        if (old is MainWindow replaced) replaced.Replaced = true;
         old?.Close();
     }
 
@@ -77,6 +115,7 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         _tray?.Dispose();
+        PortableEngine.Stop();
         _instance?.Dispose();
         base.OnExit(e);
     }

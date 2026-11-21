@@ -128,17 +128,21 @@ build/docker.sh test tests/AgsCopy.Core.Tests
 build/publish.sh            # → publish/AGS-Copy (self-contained win-x64)
 ```
 
-The MSI is built with WiX 5, which runs only on Windows: `build\msi.ps1 [-Version x.y.z]`
-gives `publish\AGS-Copy-<version>.msi`. On Windows with the SDK: `dotnet build`, `dotnet test`.
+The icon (`src/AgsCopy.App/AGS-Copy.ico`, `Tray.png`) is drawn from the AGS Media mark by
+`python3 assets/make_icon.py` (Pillow); the result is committed, so builds do not need Python.
+
+`build/publish.sh` also makes `publish/AGS-Copy-Portable.exe`. The MSI is built with WiX 5,
+which runs only on Windows: `build\package.ps1 [-Version x.y.z]` gives
+`publish\AGS-Copy-<version>.msi` and `publish\AGS-Copy-Portable-<version>.exe`. On Windows with the SDK: `dotnet build`, `dotnet test`.
 
 ### GitHub Actions
 
 `.github/workflows/build.yml` runs on every push and pull request:
 
 - tests on Linux;
-- the MSI on Windows, kept as a workflow artifact.
+- the MSI and the portable exe on Windows, kept as workflow artifacts.
 
-A `v1.2.3` tag also publishes a GitHub release named after it, with the MSI attached. That
+A `v1.2.3` tag also publishes a GitHub release named after it, with both attached. That
 release is what installed copies find when they look for updates. To release:
 
 ```bash
@@ -169,6 +173,21 @@ msiexec /x AGS-Copy-0.2.0.msi /qn
 ```
 
 The package is not code-signed yet: SmartScreen may warn the first time.
+
+### Portable
+
+`AGS-Copy-Portable-<version>.exe` is one file that needs no installation: copy it anywhere
+(a USB stick too) and run it. It asks for administrator rights, like the installed version.
+
+- The service's engine runs inside the window, on a pipe private to the process. Jobs, copies,
+  summary, layout preview, VSS, versions and reports work the same.
+- Nothing runs in the background: scheduled jobs start only while the window is open, there is
+  no tray icon and no watchdog. Closing the window stops running copies (it asks first).
+- Jobs, history, logs and reports go to `AGS-Copy-Data` next to the exe, so they travel with it.
+  If that folder is read-only they go to `%LocalAppData%\AGS-Copy-Portable`.
+- Stored network passwords are encrypted for the Windows user and computer that saved them: on
+  another PC they must be typed again.
+- When a newer version is out, *Update now* opens the release page to download the new exe.
 
 ### PowerShell scripts
 

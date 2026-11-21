@@ -22,7 +22,7 @@ public sealed class ShadowCopy : IDisposable
     private static readonly SemaphoreSlim CreateLock = new(1, 1);
     private static readonly object RegistryLock = new();
 
-    private static string VssDir => Path.Combine(AppPaths.DataDir, "vss");
+    private static string VssDir => AppPaths.VssDir;
     private static string RegistryFile => Path.Combine(AppPaths.DataDir, "vss.json");
 
     public string ShadowId { get; }

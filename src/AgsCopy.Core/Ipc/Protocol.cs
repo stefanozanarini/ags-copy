@@ -9,7 +9,8 @@ namespace AgsCopy.Core.Ipc;
 /// </summary>
 public static class Pipe
 {
-    public const string Name = "AgsCopy.Service.v1";
+    /// <summary>The service's pipe; the portable build serves its own, private to the process.</summary>
+    public static string Name { get; set; } = "AgsCopy.Service.v1";
 }
 
 public static class Commands

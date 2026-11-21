@@ -24,7 +24,8 @@ public static class Updater
     /// </summary>
     public static async Task InstallAsync(UpdateInfo update)
     {
-        if (update.MsiUrl == null)
+        // The portable exe is replaced by hand: show where to download the new one.
+        if (update.MsiUrl == null || AppPaths.Portable)
         {
             OpenPage(update);
             return;

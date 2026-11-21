@@ -21,7 +21,6 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        Icon = TrayIcons.WindowIcon();
         JobsGrid.ItemsSource = _rows;
 
         _loadingLanguage = true;
@@ -36,8 +35,20 @@ public partial class MainWindow : Window
             ShowUpdate(await Updater.CheckAsync());
         };
         Closed += (_, _) => _timer.Stop();
+        if (AppPaths.Portable)
+        {
+            Title = HeaderTitle.Text = "AGS-Copy Portable";
+            // Closing the window ends the engine and any copy it is running.
+            Closing += (_, e) =>
+            {
+                if (!Replaced && _rows.Any(r => r.Running) && !Ui.Confirm(this, Loc.T("portable.closing"), danger: true)) e.Cancel = true;
+            };
+        }
         UpdateButtons();
     }
+
+    /// <summary>True when a fresh window takes this one's place (language change): nothing ends.</summary>
+    public bool Replaced { get; set; }
 
     private JobRow? Selected => JobsGrid.SelectedItem as JobRow;
 
@@ -79,7 +90,9 @@ public partial class MainWindow : Window
         PauseButton.IsChecked = status.SchedulerPaused;
         PausedBanner.Visibility = status.SchedulerPaused ? Visibility.Visible : Visibility.Collapsed;
         var running = status.Jobs.Count(j => j.Running);
-        StatusText.Text = Loc.F("main.status", status.Version, status.Jobs.Count, running);
+        StatusText.Text = AppPaths.Portable
+            ? Loc.F("portable.status", status.Version, status.Jobs.Count, running, AppPaths.DataDir)
+            : Loc.F("main.status", status.Version, status.Jobs.Count, running);
     }
 
     private void UpdateButtons()

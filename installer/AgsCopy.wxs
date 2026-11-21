@@ -1,5 +1,5 @@
 <!--
-  AGS-Copy MSI (WiX 5). Built by build/msi.ps1 on Windows (and by the GitHub workflow):
+  AGS-Copy MSI (WiX 5). Built by build/package.ps1 on Windows (and by the GitHub workflow):
     wix build installer/AgsCopy.wxs -arch x64 -ext WixToolset.Util.wixext
         -d Version=x.y.z -bindpath pub=publish/AGS-Copy -o AGS-Copy-x.y.z.msi
   Silent install:  msiexec /i AGS-Copy-x.y.z.msi /qn

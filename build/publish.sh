@@ -9,3 +9,9 @@ rm -rf "$ROOT/$OUT"
 cp "$ROOT/installer/install.ps1" "$ROOT/installer/uninstall.ps1" "$ROOT/$OUT/"
 rm -f "$ROOT/$OUT"/*.pdb
 echo "Package ready in $OUT"
+
+# Portable single exe (see build/package.ps1).
+"$ROOT/build/docker.sh" "publish src/AgsCopy.App -c Release -r win-x64 --self-contained -p:AgsPortable=true -o publish/portable"
+mv "$ROOT/publish/portable/AGS-Copy.exe" "$ROOT/publish/AGS-Copy-Portable.exe"
+rm -rf "$ROOT/publish/portable"
+ls -lh "$ROOT/publish/AGS-Copy-Portable.exe"

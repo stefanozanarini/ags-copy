@@ -13,10 +13,27 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>false</SelfContained>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Drawn by assets/make_icon.py. Windows also show it in the title bar and taskbar. -->
+    <ApplicationIcon>AGS-Copy.ico</ApplicationIcon>
+    <!-- The service is referenced so that the portable build can host the engine in-process. -->
+    <ValidateExecutableReferencesMatchSelfContained>false</ValidateExecutableReferencesMatchSelfContained>
+  </PropertyGroup>
+
+  <!-- dotnet publish -p:AgsPortable=true: one exe that runs without installing anything. -->
+  <PropertyGroup Condition="'$(AgsPortable)' == 'true'">
+    <DefineConstants>$(DefineConstants);PORTABLE</DefineConstants>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
   </PropertyGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="Tray.png" LogicalName="Tray.png" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\AgsCopy.Core\AgsCopy.Core.csproj" />
+    <ProjectReference Include="..\AgsCopy.Service\AgsCopy.Service.csproj" />
   </ItemGroup>
 
 </Project>

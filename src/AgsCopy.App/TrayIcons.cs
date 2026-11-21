@@ -1,8 +1,6 @@
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
-using System.Windows.Interop;
-using System.Windows.Media.Imaging;
 
 namespace AgsCopy.App;
 
@@ -15,31 +13,34 @@ public enum TrayState
     Paused,
 }
 
-/// <summary>Icons drawn at runtime: two arrows on a coloured badge, one colour per state.</summary>
+/// <summary>Tray icons: the AGS-Copy mark with a dot in the corner, one colour per state.</summary>
 public static class TrayIcons
 {
     private static readonly Dictionary<TrayState, Icon> Cache = [];
+    private static Bitmap? _mark;
 
     public static Icon Get(TrayState state)
     {
         if (Cache.TryGetValue(state, out var icon)) return icon;
         var color = state switch
         {
-            TrayState.Idle => Color.FromArgb(46, 125, 50),
-            TrayState.Running => Color.FromArgb(31, 111, 178),
-            TrayState.Error => Color.FromArgb(198, 40, 40),
-            TrayState.Paused => Color.FromArgb(224, 138, 0),
-            _ => Color.FromArgb(120, 120, 120),
+            TrayState.Idle => Color.FromArgb(46, 160, 60),
+            TrayState.Running => Color.FromArgb(40, 130, 220),
+            TrayState.Error => Color.FromArgb(230, 40, 40),
+            TrayState.Paused => Color.FromArgb(240, 150, 0),
+            _ => Color.FromArgb(150, 150, 150),
         };
         icon = Draw(color, 32);
         Cache[state] = icon;
         return icon;
     }
 
-    public static System.Windows.Media.ImageSource WindowIcon()
+    private static Bitmap Mark()
     {
-        var icon = Get(TrayState.Running);
-        return Imaging.CreateBitmapSourceFromHIcon(icon.Handle, System.Windows.Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions());
+        if (_mark != null) return _mark;
+        using var stream = typeof(TrayIcons).Assembly.GetManifestResourceStream("Tray.png")
+                           ?? throw new InvalidOperationException("Tray.png resource missing");
+        return _mark = new Bitmap(stream);
     }
 
     private static Icon Draw(Color color, int size)
@@ -48,18 +49,18 @@ public static class TrayIcons
         using (var g = Graphics.FromImage(bmp))
         {
             g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
             g.Clear(Color.Transparent);
-            using (var path = RoundedRect(new RectangleF(1, 1, size - 2, size - 2), size / 5f))
-            using (var fill = new SolidBrush(color))
-                g.FillPath(fill, path);
+            g.DrawImage(Mark(), 0, 0, size, size);
 
-            using var pen = new Pen(Color.White, size / 10f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
-            float s = size;
-            // Upper arrow pointing right, lower arrow pointing left.
-            g.DrawLine(pen, s * .22f, s * .36f, s * .76f, s * .36f);
-            g.DrawLines(pen, [new PointF(s * .60f, s * .22f), new PointF(s * .76f, s * .36f), new PointF(s * .60f, s * .50f)]);
-            g.DrawLine(pen, s * .78f, s * .66f, s * .24f, s * .66f);
-            g.DrawLines(pen, [new PointF(s * .40f, s * .52f), new PointF(s * .24f, s * .66f), new PointF(s * .40f, s * .80f)]);
+            // State dot, bottom right, ringed in white so it stands out on the black tile.
+            var d = size * 0.46f;
+            var r = new RectangleF(size - d, size - d, d - 0.5f, d - 0.5f);
+            using (var ring = new SolidBrush(Color.White))
+                g.FillEllipse(ring, r);
+            r.Inflate(-size * 0.07f, -size * 0.07f);
+            using (var fill = new SolidBrush(color))
+                g.FillEllipse(fill, r);
         }
 
         var handle = bmp.GetHicon();
@@ -71,18 +72,6 @@ public static class TrayIcons
         {
             DestroyIcon(handle);
         }
-    }
-
-    private static GraphicsPath RoundedRect(RectangleF r, float radius)
-    {
-        var d = radius * 2;
-        var p = new GraphicsPath();
-        p.AddArc(r.X, r.Y, d, d, 180, 90);
-        p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
-        p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
-        p.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
-        p.CloseFigure();
-        return p;
     }
 
     [DllImport("user32.dll")]

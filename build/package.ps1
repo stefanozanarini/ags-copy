@@ -1,6 +1,8 @@
-# Builds publish\AGS-Copy-<version>.msi on Windows (the GitHub workflow runs this too).
-#   build\msi.ps1                 version from Directory.Build.props
-#   build\msi.ps1 -Version 1.2.3
+# Builds, on Windows (the GitHub workflow runs this too):
+#   publish\AGS-Copy-<version>.msi            installer: services, tray, Start menu
+#   publish\AGS-Copy-Portable-<version>.exe   one file, nothing to install
+#   build\package.ps1                 version from Directory.Build.props
+#   build\package.ps1 -Version 1.2.3
 param([string]$Version)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -25,3 +27,13 @@ if ($LASTEXITCODE) { throw 'wix build failed' }
 $msi = Get-Item $out
 if ($msi.Length -lt 20MB) { throw "$out is only $($msi.Length) bytes: files are missing" }
 $msi
+
+# Portable: the GUI with the engine inside, as a single self-contained exe.
+$portableDir = Join-Path $root 'publish\portable'
+if (Test-Path $portableDir) { Remove-Item -Recurse -Force $portableDir }
+dotnet publish src\AgsCopy.App -c Release -r win-x64 --self-contained -p:AgsPortable=true -p:Version=$Version -o $portableDir
+if ($LASTEXITCODE) { throw 'dotnet publish (portable) failed' }
+$portable = "publish\AGS-Copy-Portable-$Version.exe"
+Move-Item -Force (Join-Path $portableDir 'AGS-Copy.exe') $portable
+Remove-Item -Recurse -Force $portableDir
+Get-Item $portable
