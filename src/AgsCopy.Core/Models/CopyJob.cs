@@ -50,8 +50,18 @@ public sealed class JobEndpoint
     public string Path { get; set; } = "";
     public StoredCredential? Credential { get; set; }
 
+    /// <summary>For SFTP: the server's host key fingerprint ("SHA256:..."), recorded by the access check.</summary>
+    public string? HostKey { get; set; }
+
     [JsonIgnore]
     public bool IsNetwork => PathUtil.IsUnc(Path);
+
+    [JsonIgnore]
+    public bool IsSftp => PathUtil.IsSftp(Path);
+
+    /// <summary>Remote endpoints take an account: Windows shares and SFTP servers.</summary>
+    [JsonIgnore]
+    public bool IsRemote => IsNetwork || IsSftp;
 
     [JsonIgnore]
     public bool HasCredential => Credential is { UserName.Length: > 0 };
@@ -73,6 +83,21 @@ public sealed class StoredCredential
 
     /// <summary>Set by the service on jobs it sends to clients: a password is stored.</summary>
     public bool HasPassword { get; set; }
+
+    /// <summary>
+    /// SFTP private key (OpenSSH or PEM text), only in transit like <see cref="Password"/>; the password
+    /// is then the key's passphrase, if it has one.
+    /// </summary>
+    public string? PrivateKey { get; set; }
+
+    /// <summary>DPAPI blob of the private key. Never leaves the service.</summary>
+    public string? ProtectedPrivateKey { get; set; }
+
+    /// <summary>Set by the service on jobs it sends to clients: a private key is stored.</summary>
+    public bool HasPrivateKey { get; set; }
+
+    [JsonIgnore]
+    public bool UsesKey => !string.IsNullOrEmpty(PrivateKey) || !string.IsNullOrEmpty(ProtectedPrivateKey) || HasPrivateKey;
 }
 
 public sealed class CopyOptions
@@ -115,6 +140,12 @@ public sealed class CopyOptions
 
     /// <summary>Version folders older than this are deleted after each run.</summary>
     public int VersionRetentionDays { get; set; } = 30;
+
+    /// <summary>
+    /// Compress the copies of compressible files (<see cref="Compression"/>): NTFS compression when the
+    /// destination supports it, otherwise each such file is written as name.gz.
+    /// </summary>
+    public bool Compress { get; set; }
 
     /// <summary>/ZB — restartable mode, falling back to backup mode on access denied.</summary>
     public bool BackupMode { get; set; }

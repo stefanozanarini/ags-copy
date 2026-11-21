@@ -152,8 +152,8 @@ public sealed class TrayController : IDisposable
         if (running.Count > 0)
         {
             var text = running.Count == 1
-                ? Loc.F("tray.running.one", running[0].Name, Fmt.Bytes(running[0].ProgressBytes))
-                : Loc.F("tray.running.many", running.Count, Fmt.Bytes(running.Sum(j => j.ProgressBytes)));
+                ? Loc.F("tray.running.one", running[0].Name, Progress.Short(running[0]))
+                : Loc.F("tray.running.many", running.Count, string.Join(", ", running.Select(j => Progress.Short(j))));
             SetState(TrayState.Running, text);
         }
         else if (_status.Jobs.Any(j => j.Enabled && j.LastRun?.Outcome == RunOutcome.Failed))

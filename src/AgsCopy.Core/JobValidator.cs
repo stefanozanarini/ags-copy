@@ -23,11 +23,14 @@ public static class JobValidator
 
         CheckCredential(job.Source, T("val.cred.source"));
         CheckCredential(job.Destination, T("val.cred.destination"));
+        CheckSftp(job.Source, "source");
+        CheckSftp(job.Destination, "destination");
 
         var o = job.Options;
         if (o.Threads is < 1 or > CopyOptions.MaxThreads) errors.Add(Loc.Fl(lang, "val.threads", CopyOptions.MaxThreads));
         if (o.Processes is < 1 or > CopyOptions.MaxProcesses) errors.Add(Loc.Fl(lang, "val.processes", CopyOptions.MaxProcesses));
         if (o.Retries < 0 || o.RetryWaitSeconds < 0) errors.Add(T("val.retries"));
+        if ((job.Source.IsSftp || job.Destination.IsSftp) && !string.IsNullOrWhiteSpace(o.ExtraArguments)) errors.Add(T("val.sftpargs"));
         if (RobocopyArgs.SourceWritingSwitches(o.ExtraArguments) is { Count: > 0 } forbidden)
             errors.Add(Loc.Fl(lang, "val.sourcewrite", string.Join(' ', forbidden)));
 
@@ -45,9 +48,18 @@ public static class JobValidator
         void CheckCredential(JobEndpoint e, string message)
         {
             if (e.Credential is not { } c) return;
-            if (!e.IsNetwork && c.UserName.Length > 0) errors.Add(message);
-            if (c.UserName.Length > 0 && string.IsNullOrEmpty(c.Password) && !c.HasPassword && string.IsNullOrEmpty(c.ProtectedPassword))
+            if (!e.IsRemote && c.UserName.Length > 0) errors.Add(message);
+            // An SFTP private key needs no password (it may have a passphrase).
+            if (c.UserName.Length > 0 && !(e.IsSftp && c.UsesKey)
+                && string.IsNullOrEmpty(c.Password) && !c.HasPassword && string.IsNullOrEmpty(c.ProtectedPassword))
                 errors.Add(message);
+        }
+
+        void CheckSftp(JobEndpoint e, string side)
+        {
+            if (!e.IsSftp) return;
+            if (!e.HasCredential) errors.Add(T("val.sftp.user." + side));
+            else if (string.IsNullOrEmpty(e.HostKey)) errors.Add(T("val.hostkey." + side));
         }
     }
 }

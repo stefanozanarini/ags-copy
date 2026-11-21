@@ -44,6 +44,21 @@ The interface is in Italian (default) and English.
   - The index has, for each job, the last successful backup and the last 30 runs as coloured
     squares linking to their pages.
   - The GUI opens them from *Report* (main window) and *Open report* (history).
+- **SFTP** sources and destinations (`sftp://server[:port]/path`), with a password or an
+  OpenSSH/PEM private key (its passphrase in the password field), stored encrypted like the
+  Windows passwords. *Check access* records the server's host key fingerprint (SHA256); runs
+  accept only that key and stop with a clear error if the server presents another one.
+- **Compression** (option, per job), of the files worth it: photos, videos, archives, PDFs and
+  Office documents, already compressed, are left as they are (`Compression.cs`).
+  - NTFS destination (local disk or Windows share): robocopy copies as usual, then the copies
+    are compressed with Windows (NTFS) compression. They stay ordinary files.
+  - Any other destination (a NAS without NTFS compression, SFTP): each such file is written as
+    `name.gz` while it is copied, so no temporary space is needed on the PC. 7-Zip and Windows 11
+    Explorer open them.
+- **Progress bar** in the job list while a job runs: percentage, bytes and files done out of the
+  total, and an estimate of the time left. Robocopy jobs first run a quick `robocopy /L` pass for
+  the totals (the bar moves without a percentage meanwhile); the same pass tells what versions
+  must keep. The tray tooltip shows the percentage.
 - **Two modes**:
   - *Copy* (`/E`) never deletes anything.
   - *Mirror* (`/MIR`) deletes destination items the source no longer has. It is shown in red
@@ -92,13 +107,24 @@ AGS-Copy.exe --run <job id>   ──┘   JSON lines, one request per connection
 
 | Project | Content |
 |---|---|
-| `src/AgsCopy.Core` | Job model, robocopy command builder, output parsers, preview, parallel plan, scheduling, DPAPI and network shares, pipe protocol, texts (`Loc.Strings.cs`) |
-| `src/AgsCopy.Service` | Worker service: job store, history, executor, scheduler, pipe server |
+| `src/AgsCopy.Core` | Job model, robocopy command builder, output parsers, preview, parallel plan, scheduling, DPAPI and network shares, pipe protocol, copy engine (`Sync/`), texts (`Loc.Strings.cs`) |
+| `src/AgsCopy.Service` | Worker service: job store, history, executor, scheduler, pipe server, SFTP (SSH.NET), NTFS compression |
 | `src/AgsCopy.Watchdog` | Worker service that starts or restarts `AGS-Copy` when it is down or hung |
 | `src/AgsCopy.App` | WPF GUI: job list, editor, history, tray |
 | `tests/AgsCopy.Core.Tests` | xUnit tests of the Core logic (they also run on Linux) |
 
 ### Points worth knowing
+
+- **Two copy engines.** Robocopy does every Windows-to-Windows job. Jobs with an SFTP endpoint,
+  or with compression on a destination without NTFS compression, go to AGS-Copy's own engine
+  (`Core/Sync`). Its rules are the same:
+  - the source is reached only through `ISourceStore` (list and read);
+  - Copy never deletes, and Mirror deletes extras or moves them to the versions folder;
+  - files are written under a temporary name and moved in place;
+  - files are compared by time (2 s tolerance) and, for plain files, size.
+
+  It keeps dates and times but not Windows permissions and attributes. Extra robocopy arguments
+  do not apply to it.
 
 - **Robocopy output is translated** by Windows ("New File" becomes "Nuovo file"). The parsers
   never read the labels. A line is a number, a tab and an absolute path (`/FP /BYTES`). Paths

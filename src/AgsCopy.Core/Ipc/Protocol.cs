@@ -74,6 +74,9 @@ public sealed class PathTestResult
 {
     public bool Ok { get; set; }
     public string Message { get; set; } = "";
+
+    /// <summary>SFTP: the fingerprint of the key the server presented, to record with the endpoint.</summary>
+    public string? HostKey { get; set; }
 }
 
 public sealed class PathListRequest
@@ -140,6 +143,13 @@ public sealed class JobStatus
     public DateTime? RunStartedUtc { get; set; }
     public long ProgressFiles { get; set; }
     public long ProgressBytes { get; set; }
+
+    /// <summary>What the run has to copy, once known (0 while it is still looking).</summary>
+    public long TotalFiles { get; set; }
+    public long TotalBytes { get; set; }
+
+    /// <summary>The run is comparing source and destination before copying.</summary>
+    public bool Scanning { get; set; }
 
     public DateTime? NextRunLocal { get; set; }
     public RunRecord? LastRun { get; set; }

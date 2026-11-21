@@ -36,16 +36,18 @@ public sealed class JobRow : ObservableObject
     {
         get
         {
-            if (_s.Running)
-            {
-                var elapsed = DateTime.UtcNow - (_s.RunStartedUtc ?? DateTime.UtcNow);
-                return Loc.F("main.progress", Fmt.Count(_s.ProgressFiles), Fmt.Bytes(_s.ProgressBytes), Fmt.Duration(elapsed));
-            }
+            if (_s.Running) return Progress.Describe(_s);
             return _s.LastRun is { } r
                 ? Loc.T("outcome." + r.Outcome) + " · " + Fmt.DateTime(r.StartUtc.ToLocalTime())
                 : Loc.T("main.never");
         }
     }
+
+    /// <summary>0-100 while running with known totals.</summary>
+    public double Percent => Progress.Percent(_s) ?? 0;
+
+    /// <summary>Running but the totals are not known yet: the bar just moves.</summary>
+    public bool Indeterminate => _s.Running && Progress.Percent(_s) == null;
 
     /// <summary>Running, Success, Warning, Failed, Cancelled or Never: drives the status dot colour.</summary>
     public string StateKey => _s.Running ? "Running" : _s.LastRun?.Outcome.ToString() ?? "Never";

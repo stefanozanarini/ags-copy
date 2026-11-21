@@ -44,7 +44,11 @@ public static class JobDescriber
             else Add(SummaryLevel.Info, "sum.versions.forever", folder);
         }
         Add(SummaryLevel.Info, "sum.readonly", src);
-        if (job.Options.UseShadowCopy)
+        if (job.Source.IsSftp)
+        {
+            // Shadow copies are a Windows matter.
+        }
+        else if (job.Options.UseShadowCopy)
         {
             if (job.Source.IsNetwork) Add(SummaryLevel.Warning, "sum.vss.network");
             else Add(SummaryLevel.Info, "sum.vss", src.Length >= 2 ? src[..2] : src); // the drive, D:
@@ -58,10 +62,13 @@ public static class JobDescriber
         AddEndpoint(job.Destination, "sum.net.destination");
 
         var o = job.Options;
+        var sftp = job.Source.IsSftp || job.Destination.IsSftp;
+        if (sftp) Add(SummaryLevel.Warning, "sum.engine.sftp");
+        if (o.Compress) Add(SummaryLevel.Info, job.Destination.IsSftp ? "sum.compress.gz" : "sum.compress", Compression.Suffix);
         if (o.ExcludeFiles.Count > 0) Add(SummaryLevel.Info, "sum.xf", string.Join(", ", o.ExcludeFiles));
         if (o.ExcludeDirectories.Count > 0) Add(SummaryLevel.Info, "sum.xd", string.Join(", ", o.ExcludeDirectories));
         if (o.ExcludeOlder) Add(SummaryLevel.Info, "sum.xo");
-        Add(SummaryLevel.Info, "sum.props." + o.FileProperties);
+        if (!sftp) Add(SummaryLevel.Info, "sum.props." + o.FileProperties);
         if (o.AutoTune) Add(SummaryLevel.Info, "sum.speed.auto");
         else Add(SummaryLevel.Info, o.Processes > 1 ? "sum.speed.parallel" : "sum.speed", o.Processes, o.Threads, o.Processes * o.Threads);
         Add(SummaryLevel.Info, "sum.retries", o.Retries, o.RetryWaitSeconds);
@@ -73,6 +80,13 @@ public static class JobDescriber
 
         void AddEndpoint(JobEndpoint e, string key)
         {
+            if (e.IsSftp)
+            {
+                var server = SftpLocation.TryParse(e.Path);
+                Add(SummaryLevel.Info, key.Replace(".net.", ".sftp."), server?.Host ?? e.Path, e.Credential?.UserName ?? "?",
+                    Loc.T(e.Credential?.UsesKey == true ? "sum.auth.key" : "sum.auth.password"), e.HostKey ?? "?");
+                return;
+            }
             if (!e.IsNetwork) return;
             if (e.HasCredential) Add(SummaryLevel.Info, key, e.Credential!.UserName);
             else Add(SummaryLevel.Info, key + ".none");

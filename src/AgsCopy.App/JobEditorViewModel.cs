@@ -17,12 +17,20 @@ public sealed class EndpointViewModel : ObservableObject
     private string _userName;
     private string _testResult = "";
     private bool? _testOk;
+    private string? _hostKey;
+    private string? _privateKey;
+    private string _keyName = "";
+    private bool _hasStoredKey;
+    private readonly SftpLocation? _originalServer;
 
     public EndpointViewModel(JobEndpoint e)
     {
         _path = e.Path;
         _userName = e.Credential?.UserName ?? "";
         HasStoredPassword = e.Credential?.HasPassword == true;
+        _hasStoredKey = e.Credential?.HasPrivateKey == true;
+        _hostKey = e.HostKey;
+        _originalServer = SftpLocation.TryParse(e.Path);
     }
 
     public string Path
@@ -32,13 +40,67 @@ public sealed class EndpointViewModel : ObservableObject
         {
             if (!Set(ref _path, value)) return;
             OnPropertyChanged(nameof(IsNetwork));
+            OnPropertyChanged(nameof(IsSftp));
+            OnPropertyChanged(nameof(IsRemote));
             OnPropertyChanged(nameof(IsLocal));
             MappedUnc = NetworkDrives.ToUnc(value);
+            // A recorded host key belongs to one server: another host or port must be checked again.
+            var now = SftpLocation.TryParse(value);
+            if (_hostKey != null && (now == null || _originalServer == null || now.Host != _originalServer.Host || now.Port != _originalServer.Port))
+                HostKey = null;
             TestResult = "";
         }
     }
 
-    public bool IsLocal => !IsNetwork;
+    public bool IsLocal => !IsRemote;
+    public bool IsSftp => PathUtil.IsSftp(_path);
+    public bool IsRemote => IsNetwork || IsSftp;
+
+    /// <summary>SFTP: fingerprint of the server's key, recorded by the access check and required by runs.</summary>
+    public string? HostKey
+    {
+        get => _hostKey;
+        set
+        {
+            if (!Set(ref _hostKey, value)) return;
+            OnPropertyChanged(nameof(HostKeyText));
+        }
+    }
+
+    public string HostKeyText => _hostKey == null ? Loc.T("endpoint.hostkey.none") : Loc.F("endpoint.hostkey", _hostKey);
+
+    /// <summary>SFTP private key loaded from a file in this session; sent once to the service, which encrypts it.</summary>
+    public void SetPrivateKey(string text, string fileName)
+    {
+        _privateKey = text;
+        KeyName = fileName;
+        TestResult = "";
+    }
+
+    public void ClearPrivateKey()
+    {
+        _privateKey = null;
+        _hasStoredKey = false;
+        KeyName = "";
+        TestResult = "";
+    }
+
+    public bool UsesKey => _privateKey != null || _hasStoredKey;
+
+    public string KeyName
+    {
+        get => _keyName;
+        private set
+        {
+            Set(ref _keyName, value);
+            OnPropertyChanged(nameof(UsesKey));
+            OnPropertyChanged(nameof(KeyText));
+        }
+    }
+
+    public string KeyText => _privateKey != null ? Loc.F("endpoint.key.loaded", _keyName)
+        : _hasStoredKey ? Loc.T("endpoint.key.stored")
+        : Loc.T("endpoint.key.none");
 
     /// <summary>The \\server\share path behind a mapped drive letter, offered in its place.</summary>
     public string? MappedUnc
@@ -110,8 +172,8 @@ public sealed class EndpointViewModel : ObservableObject
 
     public JobEndpoint ToEndpoint()
     {
-        var e = new JobEndpoint { Path = PathUtil.NormalizeDir(_path) };
-        if (IsNetwork && !string.IsNullOrWhiteSpace(_userName))
+        var e = new JobEndpoint { Path = PathUtil.NormalizeDir(_path), HostKey = IsSftp ? _hostKey : null };
+        if (IsRemote && !string.IsNullOrWhiteSpace(_userName))
         {
             e.Credential = new StoredCredential
             {
@@ -119,6 +181,11 @@ public sealed class EndpointViewModel : ObservableObject
                 Password = Password.Length > 0 ? Password : null,
                 HasPassword = Password.Length == 0 && HasStoredPassword,
             };
+            if (IsSftp)
+            {
+                e.Credential.PrivateKey = _privateKey;
+                e.Credential.HasPrivateKey = _privateKey == null && _hasStoredKey;
+            }
         }
         return e;
     }
@@ -181,6 +248,7 @@ public sealed class JobEditorViewModel : ObservableObject
         BackupMode = o.BackupMode;
         UseShadowCopy = o.UseShadowCopy;
         KeepVersions = o.KeepVersions;
+        Compress = o.Compress;
         VersionRetentionDays = o.VersionRetentionDays;
         ExcludeOlder = o.ExcludeOlder;
         SkipJunctions = o.SkipJunctions;
@@ -289,6 +357,8 @@ public sealed class JobEditorViewModel : ObservableObject
     public bool UnbufferedIO { get; set; }
     public bool BackupMode { get; set; }
     public bool UseShadowCopy { get; set; }
+    public bool Compress { get; set; }
+
     public bool KeepVersions
     {
         get => _keepVersions;
@@ -435,6 +505,7 @@ public sealed class JobEditorViewModel : ObservableObject
         o.BackupMode = BackupMode;
         o.UseShadowCopy = UseShadowCopy;
         o.KeepVersions = KeepVersions;
+        o.Compress = Compress;
         o.VersionRetentionDays = VersionRetentionDays;
         o.ExcludeOlder = ExcludeOlder;
         o.SkipJunctions = SkipJunctions;

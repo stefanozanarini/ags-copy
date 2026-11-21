@@ -135,7 +135,19 @@
                     <DataGridTextColumn Header="{l:T col.destination}" Binding="{Binding Destination}" Width="*" />
                     <DataGridTextColumn Header="{l:T col.schedule}" Binding="{Binding ScheduleText}" Width="170" />
                     <DataGridTextColumn Header="{l:T col.next}" Binding="{Binding NextRunText}" Width="120" />
-                    <DataGridTextColumn Header="{l:T col.state}" Binding="{Binding StateText}" Width="220" />
+                    <DataGridTemplateColumn Header="{l:T col.state}" Width="280">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <StackPanel VerticalAlignment="Center">
+                                    <TextBlock Text="{Binding StateText}" TextTrimming="CharacterEllipsis" ToolTip="{Binding StateText}" />
+                                    <ProgressBar Height="5" Margin="0,2,0,0" Minimum="0" Maximum="100" Value="{Binding Percent, Mode=OneWay}"
+                                                 IsIndeterminate="{Binding Indeterminate, Mode=OneWay}" Foreground="{StaticResource Brand}"
+                                                 Background="{StaticResource Selection}" BorderThickness="0"
+                                                 Visibility="{Binding Running, Converter={StaticResource BoolToVis}}" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
                 </DataGrid.Columns>
             </DataGrid>
 

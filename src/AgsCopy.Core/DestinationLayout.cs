@@ -1,4 +1,3 @@
-using System.IO.Enumeration;
 using AgsCopy.Core.Models;
 
 namespace AgsCopy.Core;
@@ -129,10 +128,5 @@ public static class DestinationLayout
         return PathUtil.LastName(n);
     }
 
-    /// <summary>Name-only exclusions (robocopy also accepts full paths; those are not matched here).</summary>
-    private static bool Excluded(CopyJob job, PathEntry e)
-    {
-        var patterns = e.IsDirectory ? job.Options.ExcludeDirectories : job.Options.ExcludeFiles;
-        return patterns.Any(p => !p.Contains('\\') && FileSystemName.MatchesSimpleExpression(p.Trim('"'), e.Name, ignoreCase: true));
-    }
+    private static bool Excluded(CopyJob job, PathEntry e) => new Exclusions(job).Excludes(e.Name, e.IsDirectory);
 }

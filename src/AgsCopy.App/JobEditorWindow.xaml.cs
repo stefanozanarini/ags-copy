@@ -171,6 +171,27 @@ public partial class JobEditorWindow : Window
 
     private void GoToOptions_Click(object sender, RoutedEventArgs e) => _vm.Step = OptionsStep;
 
+    private void ChooseKey_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not EndpointViewModel ep) return;
+        var dialog = new OpenFileDialog { Title = Loc.T("endpoint.key.title"), Filter = Loc.T("endpoint.key.filter") };
+        var ssh = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ssh");
+        if (Directory.Exists(ssh)) dialog.InitialDirectory = ssh;
+        if (dialog.ShowDialog(this) != true) return;
+        var info = new FileInfo(dialog.FileName);
+        if (info.Length > 64 * 1024)
+        {
+            Ui.Error(this, Loc.T("endpoint.key.toobig"));
+            return;
+        }
+        ep.SetPrivateKey(File.ReadAllText(info.FullName), info.Name);
+    }
+
+    private void RemoveKey_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is EndpointViewModel ep) ep.ClearPrivateKey();
+    }
+
     private void UseMapped_Click(object sender, RoutedEventArgs e)
     {
         if ((sender as FrameworkElement)?.DataContext is EndpointViewModel { MappedUnc: { } unc } ep) ep.Path = unc;
@@ -217,6 +238,8 @@ public partial class JobEditorWindow : Window
             }, TimeSpan.FromMinutes(1));
             ep.TestOk = result?.Ok;
             ep.TestResult = result?.Message ?? "";
+            // First contact with an SFTP server: record its key; runs will accept only that one.
+            if (result?.HostKey != null && ep.IsSftp) ep.HostKey = result.HostKey;
             if (result?.Ok == true) await ShowListingAsync(ep);
         }
         catch (Exception ex)

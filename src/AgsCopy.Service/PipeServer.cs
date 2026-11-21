@@ -238,6 +238,9 @@ public sealed class PipeServer(
                 RunStartedUtc = running?.Record.StartUtc,
                 ProgressFiles = running?.Files ?? 0,
                 ProgressBytes = running?.Bytes ?? 0,
+                TotalFiles = running?.TotalFiles ?? 0,
+                TotalBytes = running?.TotalBytes ?? 0,
+                Scanning = running?.Scanning ?? false,
                 NextRunLocal = scheduler.NextRun(job),
                 LastRun = running == null ? history.Last(job.Id) : history.List(job.Id, 2).Skip(1).FirstOrDefault(),
             });

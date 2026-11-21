@@ -143,6 +143,13 @@ public sealed class ProgressCounter
     public long Files => Interlocked.Read(ref _files);
     public long Bytes => Interlocked.Read(ref _bytes);
 
+    /// <summary>A file the copy engine wrote (robocopy runs count from its output instead).</summary>
+    public void AddFile(long bytes)
+    {
+        Interlocked.Increment(ref _files);
+        Interlocked.Add(ref _bytes, bytes);
+    }
+
     public void Add(string? line)
     {
         if (RobocopyOutput.ParseLine(line) is { IsDirectory: false } l && l.Size >= 0 && PathUtil.IsUnder(l.Path, _source))

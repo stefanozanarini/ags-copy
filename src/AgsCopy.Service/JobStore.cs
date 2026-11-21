@@ -66,7 +66,7 @@ public sealed class JobStore
         return removed;
     }
 
-    /// <summary>The job as clients may see it: no password material at all.</summary>
+    /// <summary>The job as clients may see it: no password or key material at all.</summary>
     public static CopyJob Sanitize(CopyJob job)
     {
         var copy = Json.Clone(job);
@@ -74,31 +74,37 @@ public sealed class JobStore
         {
             if (c == null) continue;
             c.HasPassword = !string.IsNullOrEmpty(c.ProtectedPassword);
-            c.ProtectedPassword = null;
-            c.Password = null;
+            c.HasPrivateKey = !string.IsNullOrEmpty(c.ProtectedPrivateKey);
+            c.ProtectedPassword = c.ProtectedPrivateKey = null;
+            c.Password = c.PrivateKey = null;
         }
         return copy;
     }
 
+    /// <summary>
+    /// Encrypts what was typed and keeps what was stored (same user, field left empty). A password is
+    /// required, except with an SFTP private key, whose passphrase is optional.
+    /// </summary>
     private static StoredCredential? Protect(JobEndpoint endpoint, JobEndpoint? stored, string? lang)
     {
         var c = endpoint.Credential;
-        if (c == null || string.IsNullOrWhiteSpace(c.UserName) || !endpoint.IsNetwork) return null;
+        if (c == null || string.IsNullOrWhiteSpace(c.UserName) || !endpoint.IsRemote) return null;
 
         var result = new StoredCredential { UserName = c.UserName.Trim() };
-        if (!string.IsNullOrEmpty(c.Password))
+        var kept = stored?.Credential is { } s && string.Equals(s.UserName, result.UserName, StringComparison.OrdinalIgnoreCase) ? s : null;
+
+        if (endpoint.IsSftp && (!string.IsNullOrEmpty(c.PrivateKey) || c.HasPrivateKey))
         {
-            result.ProtectedPassword = CredentialProtector.Protect(c.Password);
+            result.ProtectedPrivateKey = !string.IsNullOrEmpty(c.PrivateKey) ? CredentialProtector.Protect(c.PrivateKey)
+                : kept?.ProtectedPrivateKey ?? throw new ServiceException(Loc.Fl(lang, "err.sftpkey.missing", result.UserName));
+            result.ProtectedPassword = !string.IsNullOrEmpty(c.Password) ? CredentialProtector.Protect(c.Password)
+                : c.HasPassword ? kept?.ProtectedPassword : null;
+            return result;
         }
-        else if (stored?.Credential is { ProtectedPassword: { } p } s
-                 && string.Equals(s.UserName, result.UserName, StringComparison.OrdinalIgnoreCase))
-        {
-            result.ProtectedPassword = p;
-        }
-        else
-        {
-            throw new ServiceException(Loc.Fl(lang, "err.password", result.UserName));
-        }
+
+        if (!string.IsNullOrEmpty(c.Password)) result.ProtectedPassword = CredentialProtector.Protect(c.Password);
+        else if (kept?.ProtectedPassword is { } p) result.ProtectedPassword = p;
+        else throw new ServiceException(Loc.Fl(lang, "err.password", result.UserName));
         return result;
     }
 
