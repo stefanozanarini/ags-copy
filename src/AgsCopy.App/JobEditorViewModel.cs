@@ -5,9 +5,14 @@ using AgsCopy.Core.Robocopy;
 
 namespace AgsCopy.App;
 
+/// <summary>A row of the folder preview shown after a successful access check.</summary>
+public sealed record ListingItem(string Glyph, string Name, string Detail);
+
 /// <summary>One side of the copy: path and, for network paths, the account to use.</summary>
 public sealed class EndpointViewModel : ObservableObject
 {
+    private string? _mappedUnc;
+    private string _listingMore = "";
     private string _path;
     private string _userName;
     private string _testResult = "";
@@ -27,8 +32,46 @@ public sealed class EndpointViewModel : ObservableObject
         {
             if (!Set(ref _path, value)) return;
             OnPropertyChanged(nameof(IsNetwork));
+            OnPropertyChanged(nameof(IsLocal));
+            MappedUnc = NetworkDrives.ToUnc(value);
             TestResult = "";
         }
+    }
+
+    public bool IsLocal => !IsNetwork;
+
+    /// <summary>The \\server\share path behind a mapped drive letter, offered in its place.</summary>
+    public string? MappedUnc
+    {
+        get => _mappedUnc;
+        private set
+        {
+            if (!Set(ref _mappedUnc, value)) return;
+            OnPropertyChanged(nameof(HasMappedUnc));
+            OnPropertyChanged(nameof(MappedText));
+        }
+    }
+
+    public bool HasMappedUnc => _mappedUnc != null;
+    public string MappedText => _mappedUnc == null ? "" : Loc.F("endpoint.mapped", _mappedUnc);
+
+    /// <summary>First items of the folder, read by the service with the given account.</summary>
+    public ObservableCollection<ListingItem> Listing { get; } = [];
+
+    public string ListingMore
+    {
+        get => _listingMore;
+        set => Set(ref _listingMore, value);
+    }
+
+    public bool HasListing => Listing.Count > 0;
+
+    public void ShowListing(IEnumerable<ListingItem> items, int more)
+    {
+        Listing.Clear();
+        foreach (var i in items) Listing.Add(i);
+        ListingMore = more > 0 ? Loc.F("layout.more", Fmt.Count(more)) : "";
+        OnPropertyChanged(nameof(HasListing));
     }
 
     public bool IsNetwork => PathUtil.IsUnc(_path);
@@ -50,7 +93,13 @@ public sealed class EndpointViewModel : ObservableObject
     public string TestResult
     {
         get => _testResult;
-        set => Set(ref _testResult, value);
+        set
+        {
+            if (!Set(ref _testResult, value) || value.Length > 0) return;
+            // Any change to path or account makes the previous check and its listing stale.
+            TestOk = null;
+            ShowListing([], 0);
+        }
     }
 
     public bool? TestOk
@@ -109,6 +158,8 @@ public sealed class JobEditorViewModel : ObservableObject
     private bool _previewRunning;
     private PreviewResult? _preview;
     private string _errors = "";
+    private bool _keepVersions;
+    private int _versionRetentionDays;
 
     public JobEditorViewModel(CopyJob job, bool isNew)
     {
@@ -238,8 +289,28 @@ public sealed class JobEditorViewModel : ObservableObject
     public bool UnbufferedIO { get; set; }
     public bool BackupMode { get; set; }
     public bool UseShadowCopy { get; set; }
-    public bool KeepVersions { get; set; }
-    public int VersionRetentionDays { get; set; }
+    public bool KeepVersions
+    {
+        get => _keepVersions;
+        set
+        {
+            if (Set(ref _keepVersions, value)) OnPropertyChanged(nameof(MirrorVersionsNote));
+        }
+    }
+
+    public int VersionRetentionDays
+    {
+        get => _versionRetentionDays;
+        set
+        {
+            if (Set(ref _versionRetentionDays, value)) OnPropertyChanged(nameof(MirrorVersionsNote));
+        }
+    }
+
+    /// <summary>Under the mirror mode: versions turn deletions into a dated, recoverable archive.</summary>
+    public string MirrorVersionsNote => !_keepVersions ? Loc.T("mode.Mirror.versions.off")
+        : _versionRetentionDays == 0 ? Loc.T("mode.Mirror.versions.forever")
+        : Loc.F("mode.Mirror.versions.on", _versionRetentionDays);
     public bool ExcludeOlder { get; set; }
     public bool SkipJunctions { get; set; }
     public bool FatFileTimes { get; set; }

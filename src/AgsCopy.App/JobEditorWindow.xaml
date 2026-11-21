@@ -41,12 +41,23 @@
                 </DockPanel>
                 <TextBlock Text="{l:T endpoint.path.hint}" Style="{StaticResource Hint}" />
 
-                <Border Style="{StaticResource Card}" Background="{StaticResource AccentLight}" BorderBrush="{StaticResource Accent}"
-                        Visibility="{Binding IsNetwork, Converter={StaticResource BoolToVis}}">
+                <!-- A drive letter mapped to a share: the service cannot see it. -->
+                <Border Style="{StaticResource Card}" Background="{StaticResource WarningLight}" BorderBrush="{StaticResource Warning}"
+                        Visibility="{Binding HasMappedUnc, Converter={StaticResource BoolToVis}}">
+                    <StackPanel>
+                        <TextBlock Text="{Binding MappedText}" Foreground="{StaticResource Warning}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                        <Button Content="{l:T endpoint.mapped.use}" Click="UseMapped_Click" HorizontalAlignment="Left" Margin="0,6,0,0" />
+                    </StackPanel>
+                </Border>
+
+                <!-- Always shown, so it is clear where the account goes; usable for \\server\share paths. -->
+                <Border Style="{StaticResource Card}" Background="{StaticResource AccentLight}" BorderBrush="{StaticResource Accent}">
                     <StackPanel>
                         <TextBlock Text="{l:T endpoint.network}" FontWeight="SemiBold" />
                         <TextBlock Text="{l:T endpoint.network.hint}" Style="{StaticResource Hint}" />
-                        <Grid>
+                        <TextBlock Text="{l:T endpoint.network.local}" Style="{StaticResource Hint}" FontStyle="Italic"
+                                   Visibility="{Binding IsLocal, Converter={StaticResource BoolToVis}}" />
+                        <Grid IsEnabled="{Binding IsNetwork}">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="12" />
@@ -71,6 +82,25 @@
                     <Button Content="{l:T endpoint.test}" Click="Test_Click" />
                     <TextBlock x:Name="Result" Text="{Binding TestResult}" VerticalAlignment="Center" TextWrapping="Wrap" MaxWidth="480" FontWeight="SemiBold" />
                 </StackPanel>
+
+                <!-- What the service sees in the folder, after a successful check. -->
+                <Border BorderBrush="{StaticResource Border}" BorderThickness="1" CornerRadius="4" Padding="8,6" Margin="0,8,0,0" Background="White"
+                        Visibility="{Binding HasListing, Converter={StaticResource BoolToVis}}">
+                    <StackPanel>
+                        <ItemsControl ItemsSource="{Binding Listing}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="{x:Type l:ListingItem}">
+                                    <StackPanel Orientation="Horizontal" Margin="0,1">
+                                        <TextBlock Text="{Binding Glyph}" FontFamily="Segoe MDL2 Assets" Foreground="{StaticResource Muted}" VerticalAlignment="Center" Margin="0,0,6,0" />
+                                        <TextBlock Text="{Binding Name}" VerticalAlignment="Center" />
+                                        <TextBlock Text="{Binding Detail}" Foreground="{StaticResource Muted}" VerticalAlignment="Center" Margin="8,0,0,0" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock Text="{Binding ListingMore}" Foreground="{StaticResource Muted}" Margin="0,2,0,0" />
+                    </StackPanel>
+                </Border>
             </StackPanel>
             <DataTemplate.Triggers>
                 <DataTrigger Binding="{Binding TestOk}" Value="True">
@@ -100,7 +130,7 @@
         <Border DockPanel.Dock="Left" Width="210" Background="{StaticResource Surface}" BorderBrush="{StaticResource Border}" BorderThickness="0,0,1,0">
             <ListBox ItemsSource="{Binding StepTitles}" SelectedIndex="{Binding Step}" BorderThickness="0" Background="Transparent" Padding="0,10">
                 <ListBox.ItemContainerStyle>
-                    <Style TargetType="ListBoxItem">
+                    <Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
                         <Setter Property="Padding" Value="16,9" />
                         <Setter Property="FontSize" Value="14" />
                     </Style>
@@ -181,6 +211,13 @@
                                     <TextBlock Text="{l:T mode.Mirror}" FontWeight="SemiBold" FontSize="15" />
                                     <TextBlock Text="{l:T mode.Mirror.desc}" TextWrapping="Wrap" Foreground="{StaticResource Muted}" />
                                     <TextBlock Text="{l:T mode.Mirror.warn}" TextWrapping="Wrap" Foreground="{StaticResource Danger}" FontWeight="SemiBold" Margin="0,4,0,0" />
+                                    <!-- File versions make a mirror an incremental backup: nothing is lost, only moved aside. -->
+                                    <Border x:Name="VersionsNote" Background="{StaticResource AccentLight}" CornerRadius="4" Padding="8,6" Margin="0,8,0,0">
+                                        <DockPanel>
+                                            <Button DockPanel.Dock="Right" Content="{l:T mode.Mirror.versions.go}" Click="GoToOptions_Click" VerticalAlignment="Center" Margin="8,0,0,0" />
+                                            <TextBlock Text="{Binding MirrorVersionsNote}" TextWrapping="Wrap" Foreground="{StaticResource Accent}" VerticalAlignment="Center" />
+                                        </DockPanel>
+                                    </Border>
                                 </StackPanel>
                             </RadioButton>
                         </Border>

@@ -7,7 +7,7 @@
         WindowStartupLocation="CenterScreen">
     <DockPanel>
         <!-- Header -->
-        <Border DockPanel.Dock="Top" Background="{StaticResource Accent}" Padding="16,10">
+        <Border DockPanel.Dock="Top" Background="{StaticResource Accent}" BorderBrush="{StaticResource Brand}" BorderThickness="0,0,0,3" Padding="16,10">
             <DockPanel>
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
                     <TextBlock Text="{l:T main.language}" Foreground="White" VerticalAlignment="Center" Margin="0,0,6,0" />
@@ -18,7 +18,7 @@
                 </StackPanel>
                 <StackPanel>
                     <TextBlock x:Name="HeaderTitle" Text="AGS-Copy" Foreground="White" FontSize="20" FontWeight="SemiBold" />
-                    <TextBlock Text="{l:T main.subtitle}" Foreground="#D6E6F5" />
+                    <TextBlock Text="{l:T main.subtitle}" Foreground="#B8BEC6" />
                 </StackPanel>
             </DockPanel>
         </Border>
@@ -29,7 +29,7 @@
         </Border>
 
         <!-- Newer version on GitHub -->
-        <Border x:Name="UpdateBanner" DockPanel.Dock="Top" Background="#E3F0FB" Padding="16,6" Visibility="Collapsed">
+        <Border x:Name="UpdateBanner" DockPanel.Dock="Top" Background="{StaticResource AccentLight}" Padding="16,6" Visibility="Collapsed">
             <DockPanel>
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
                     <Button x:Name="UpdateInstallButton" Content="{l:T update.install}" Style="{StaticResource PrimaryButton}" Click="UpdateInstall_Click" />
@@ -87,7 +87,7 @@
                         </Setter>
                         <Style.Triggers>
                             <Trigger Property="IsSelected" Value="True">
-                                <Setter Property="Background" Value="#DCEAF7" />
+                                <Setter Property="Background" Value="{StaticResource Selection}" />
                                 <Setter Property="Foreground" Value="Black" />
                             </Trigger>
                         </Style.Triggers>

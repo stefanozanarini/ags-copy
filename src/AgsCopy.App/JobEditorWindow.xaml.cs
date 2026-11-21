@@ -167,6 +167,39 @@ public partial class JobEditorWindow : Window
         }
     }
 
+    private const int OptionsStep = 4;
+
+    private void GoToOptions_Click(object sender, RoutedEventArgs e) => _vm.Step = OptionsStep;
+
+    private void UseMapped_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is EndpointViewModel { MappedUnc: { } unc } ep) ep.Path = unc;
+    }
+
+    private const int ListingRows = 12;
+
+    /// <summary>First folders and files, as the service reads them with the endpoint's account.</summary>
+    private async Task ShowListingAsync(EndpointViewModel ep)
+    {
+        var list = await PipeClient.CallAsync<PathListResult>(Commands.ListPath, new PathListRequest
+        {
+            Endpoint = ep.ToEndpoint(),
+            JobId = _vm.IsNew ? null : _vm.JobId,
+            IsDestination = ReferenceEquals(ep, _vm.Destination),
+        }, TimeSpan.FromMinutes(1));
+        if (list is not { Ok: true, Exists: true }) return;
+        if (list.Total == 0)
+        {
+            ep.ShowListing([new ListingItem("", Loc.T("endpoint.empty"), "")], 0);
+            return;
+        }
+        var items = list.Entries
+            .OrderBy(x => !x.IsDirectory).ThenBy(x => x.Name, StringComparer.CurrentCultureIgnoreCase)
+            .Take(ListingRows)
+            .Select(x => new ListingItem(x.IsDirectory ? "\uE8B7" : "\uE8A5", x.Name, x.IsDirectory ? "" : Fmt.Bytes(x.Size)));
+        ep.ShowListing(items, list.Total - Math.Min(list.Total, ListingRows));
+    }
+
     private async void Test_Click(object sender, RoutedEventArgs e)
     {
         if ((sender as FrameworkElement)?.DataContext is not EndpointViewModel ep) return;
@@ -184,6 +217,7 @@ public partial class JobEditorWindow : Window
             }, TimeSpan.FromMinutes(1));
             ep.TestOk = result?.Ok;
             ep.TestResult = result?.Message ?? "";
+            if (result?.Ok == true) await ShowListingAsync(ep);
         }
         catch (Exception ex)
         {

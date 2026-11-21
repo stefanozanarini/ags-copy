@@ -237,7 +237,7 @@ public static class ReportBuilder
         sb.Append("<footer>").Append(H(Loc.Fl(lang, "rep.footer", Fmt.DateTime(DateTime.Now, Loc.CultureOf(lang))))).Append("</footer></main></body></html>");
 
     private const string Css = """
-        :root{--fg:#1f2328;--muted:#6b7280;--line:#e5e7eb;--bg:#fff;--surface:#f6f8fa;--accent:#1f6fb2;--ok:#2e7d32;--warn:#b26a00;--bad:#c62828}
+        :root{--fg:#1f2328;--muted:#6b7280;--line:#e5e7eb;--bg:#fff;--surface:#f6f8fa;--accent:#2a2e35;--ok:#2e7d32;--warn:#b26a00;--bad:#c62828}
         *{box-sizing:border-box}body{margin:0;background:var(--surface);color:var(--fg);font:14px/1.45 "Segoe UI",system-ui,sans-serif}
         main{max-width:1100px;margin:0 auto;padding:24px 16px}header{margin-bottom:16px}
         .brand{color:var(--accent);font-weight:600;font-size:12px;letter-spacing:.08em;text-transform:uppercase}
