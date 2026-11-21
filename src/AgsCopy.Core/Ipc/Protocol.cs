@@ -28,6 +28,7 @@ public static class Commands
     public const string CancelJob = "jobs.cancel";
     public const string ReadLog = "log.read";
     public const string TestPath = "path.test";
+    public const string ListPath = "path.list";
     public const string PauseScheduler = "scheduler.pause";
     public const string RunReport = "report.run";
     public const string ReportBundle = "report.bundle";
@@ -72,6 +73,26 @@ public sealed class PathTestResult
 {
     public bool Ok { get; set; }
     public string Message { get; set; } = "";
+}
+
+public sealed class PathListRequest
+{
+    public JobEndpoint Endpoint { get; set; } = new();
+    public Guid? JobId { get; set; }
+    public bool IsDestination { get; set; }
+    /// <summary>Subfolder to list, relative to the endpoint path ("" = the endpoint itself).</summary>
+    public string Relative { get; set; } = "";
+}
+
+public sealed class PathListResult
+{
+    /// <summary>False when the folder could not be read (Message says why).</summary>
+    public bool Ok { get; set; }
+    public bool Exists { get; set; }
+    public string Message { get; set; } = "";
+    public List<PathEntry> Entries { get; set; } = [];
+    /// <summary>Items in the folder; more than Entries when the listing was cut.</summary>
+    public int Total { get; set; }
 }
 
 public sealed class LogRequest

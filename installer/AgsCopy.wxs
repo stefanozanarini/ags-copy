@@ -1,0 +1,70 @@
+<!--
+  AGS-Copy MSI (WiX 5). Built by build/msi.ps1 on Windows (and by the GitHub workflow):
+    wix build installer/AgsCopy.wxs -arch x64 -ext WixToolset.Util.wixext
+        -d Version=x.y.z -bindpath pub=publish/AGS-Copy -o AGS-Copy-x.y.z.msi
+  Silent install:  msiexec /i AGS-Copy-x.y.z.msi /qn
+  Jobs, credentials and history in %ProgramData%\AGS-Copy are not part of the package:
+  an upgrade or a removal leaves them in place.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <Package Name="AGS-Copy" Manufacturer="AGS Media" Version="$(var.Version)"
+           UpgradeCode="7B49DEBF-3509-400A-8702-F8E69C847428" Scope="perMachine" Compressed="yes">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of AGS-Copy is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="AppIcon" SourceFile="!(bindpath.pub)\AGS-Copy.exe" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/stefanozanarini/ags-copy" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="AGS-Copy" />
+    </StandardDirectory>
+
+    <ComponentGroup Id="Payload" Directory="INSTALLFOLDER">
+      <Component Id="Service">
+        <File Id="ServiceExe" Source="!(bindpath.pub)\AgsCopy.Service.exe" KeyPath="yes" />
+        <ServiceInstall Name="AGS-Copy" DisplayName="AGS-Copy" Description="Scheduled copies and backups with robocopy."
+                        Type="ownProcess" Start="auto" ErrorControl="normal" Account="LocalSystem" Vital="yes">
+          <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart" ThirdFailureActionType="restart"
+                              RestartServiceDelayInSeconds="60" ResetPeriodInDays="1" />
+        </ServiceInstall>
+        <ServiceControl Id="ServiceControl" Name="AGS-Copy" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+      </Component>
+
+      <!-- Starts AGS-Copy when it stays stopped, restarts it when it hangs. -->
+      <Component Id="Watchdog">
+        <File Id="WatchdogExe" Source="!(bindpath.pub)\AgsCopy.Watchdog.exe" KeyPath="yes" />
+        <ServiceInstall Name="AGS-Copy-Watchdog" DisplayName="AGS-Copy Watchdog"
+                        Description="Keeps the AGS-Copy service running: starts it when it stops and restarts it when it stops answering."
+                        Type="ownProcess" Start="auto" ErrorControl="normal" Account="LocalSystem" Vital="yes">
+          <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart" ThirdFailureActionType="restart"
+                              RestartServiceDelayInSeconds="60" ResetPeriodInDays="1" />
+        </ServiceInstall>
+        <ServiceControl Id="WatchdogControl" Name="AGS-Copy-Watchdog" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+      </Component>
+
+      <Component Id="Gui">
+        <File Id="GuiExe" Source="!(bindpath.pub)\AGS-Copy.exe" KeyPath="yes">
+          <Shortcut Id="StartMenu" Directory="ProgramMenuFolder" Name="AGS-Copy" WorkingDirectory="INSTALLFOLDER" Icon="AppIcon" />
+        </File>
+        <!-- Tray icon at every logon, for every user. -->
+        <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\Run" Name="AGS-Copy"
+                       Type="string" Value="&quot;[INSTALLFOLDER]AGS-Copy.exe&quot; --tray" />
+      </Component>
+
+      <!-- Everything else dotnet publish produced: runtime, libraries, resources. -->
+      <Files Include="!(bindpath.pub)\**">
+        <Exclude Files="!(bindpath.pub)\AgsCopy.Service.exe" />
+        <Exclude Files="!(bindpath.pub)\AGS-Copy.exe" />
+        <Exclude Files="!(bindpath.pub)\AgsCopy.Watchdog.exe" />
+        <Exclude Files="!(bindpath.pub)\*.ps1" />
+      </Files>
+    </ComponentGroup>
+
+    <Feature Id="Main">
+      <ComponentGroupRef Id="Payload" />
+    </Feature>
+  </Package>
+</Wix>

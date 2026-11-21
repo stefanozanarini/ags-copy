@@ -2,6 +2,7 @@ using System.Windows.Forms;
 using System.Windows.Threading;
 using AgsCopy.Core.Ipc;
 using AgsCopy.Core.Models;
+using AgsCopy.Core.Updates;
 
 namespace AgsCopy.App;
 
@@ -15,6 +16,9 @@ public sealed class TrayController : IDisposable
     private readonly DispatcherTimer _timer;
     private readonly ToolStripMenuItem _runMenu;
     private readonly ToolStripMenuItem _statusItem;
+    private readonly ToolStripMenuItem _updateItem;
+    private readonly DispatcherTimer _updateTimer;
+    private UpdateInfo? _update;
     private ServiceStatus? _status;
     private HashSet<Guid> _runningBefore = [];
     private bool _polling;
@@ -26,6 +30,8 @@ public sealed class TrayController : IDisposable
         var menu = new ContextMenuStrip();
         menu.Items.Add(new ToolStripMenuItem(Loc.T("tray.open"), null, (_, _) => OpenMain()) { Font = new System.Drawing.Font(menu.Font, System.Drawing.FontStyle.Bold) });
         menu.Items.Add(_statusItem);
+        _updateItem = new ToolStripMenuItem("", null, async (_, _) => await InstallUpdateAsync()) { Visible = false };
+        menu.Items.Add(_updateItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_runMenu);
         menu.Items.Add(new ToolStripSeparator());
@@ -43,12 +49,54 @@ public sealed class TrayController : IDisposable
 
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
         _timer.Tick += async (_, _) => await PollAsync();
+
+        // At start, then once a day: the tray stays up for as long as the user is logged on.
+        _updateTimer = new DispatcherTimer { Interval = TimeSpan.FromHours(24) };
+        _updateTimer.Tick += async (_, _) => await CheckUpdateAsync(again: true);
+        _icon.BalloonTipClicked += async (_, _) =>
+        {
+            if (_balloonIsUpdate) await InstallUpdateAsync();
+        };
+    }
+
+    private bool _balloonIsUpdate;
+
+    private async Task CheckUpdateAsync(bool again)
+    {
+        var update = await Updater.CheckAsync(again);
+        if (update == null || update.Version == _update?.Version) return;
+        _update = update;
+        _updateItem.Text = Loc.F("update.menu", update.Version);
+        _updateItem.Visible = true;
+        _balloonIsUpdate = true;
+        _icon.ShowBalloonTip(10000, "AGS-Copy", Loc.F("update.balloon", update.Version), ToolTipIcon.Info);
+    }
+
+    private async Task InstallUpdateAsync()
+    {
+        if (_update == null) return;
+        var running = _status?.Jobs.Where(j => j.Running).Select(j => j.Name).ToList() ?? [];
+        var question = Loc.F("update.confirm", _update.Version, UpdateCheck.Current)
+                       + (running.Count > 0 ? Environment.NewLine + Environment.NewLine + Loc.T("update.running") : "");
+        if (MessageBox.Show(question, "AGS-Copy", MessageBoxButtons.YesNo, running.Count > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Question,
+                MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
+        try
+        {
+            _icon.ShowBalloonTip(5000, "AGS-Copy", Loc.F("update.downloading", _update.Version), ToolTipIcon.Info);
+            await Updater.InstallAsync(_update);
+        }
+        catch (Exception e)
+        {
+            MessageBox.Show(Loc.F("update.failed", e.Message), "AGS-Copy", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
     }
 
     public void Start()
     {
         _timer.Start();
         _ = PollAsync();
+        _updateTimer.Start();
+        _ = CheckUpdateAsync(again: false);
     }
 
     private static void OpenMain() => Elevation.StartElevated();
@@ -145,12 +193,14 @@ public sealed class TrayController : IDisposable
             RunOutcome.Cancelled => (ToolTipIcon.Warning, "tray.done.cancel"),
             _ => (ToolTipIcon.Error, "tray.done.fail"),
         };
+        _balloonIsUpdate = false;
         _icon.ShowBalloonTip(5000, job.Name, Loc.F(key, Fmt.Count(r.FilesCopied), Fmt.Bytes(r.BytesCopied), Fmt.Duration(r.Duration)), icon);
     }
 
     public void Dispose()
     {
         _timer.Stop();
+        _updateTimer.Stop();
         _icon.Visible = false;
         _icon.Dispose();
     }

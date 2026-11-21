@@ -20,6 +20,11 @@ if (-not (Test-Path (Join-Path $Source 'AgsCopy.Service.exe'))) {
 
 Write-Host "Installing AGS-Copy in $InstallDir"
 
+$WatchdogName = 'AGS-Copy-Watchdog'
+# The watchdog would start the service again while files are copied: stop it first.
+$watchdog = Get-Service -Name $WatchdogName -ErrorAction SilentlyContinue
+if ($watchdog -and $watchdog.Status -ne 'Stopped') { Stop-Service -Name $WatchdogName -Force }
+
 $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 if ($service -and $service.Status -ne 'Stopped') {
     Write-Host 'Stopping the service (running jobs are interrupted)...'
@@ -43,6 +48,18 @@ else {
 # Restart the service if it crashes.
 & sc.exe failure $ServiceName reset= 86400 actions= restart/60000/restart/60000/restart/60000 | Out-Null
 Start-Service -Name $ServiceName
+
+$wexe = Join-Path $InstallDir 'AgsCopy.Watchdog.exe'
+if (-not $watchdog) {
+    New-Service -Name $WatchdogName -BinaryPathName "`"$wexe`"" -DisplayName 'AGS-Copy Watchdog' `
+        -Description 'Keeps the AGS-Copy service running: starts it when it stops and restarts it when it stops answering.' `
+        -StartupType Automatic | Out-Null
+}
+else {
+    & sc.exe config $WatchdogName binPath= "`"$wexe`"" start= auto | Out-Null
+}
+& sc.exe failure $WatchdogName reset= 86400 actions= restart/60000/restart/60000/restart/60000 | Out-Null
+Start-Service -Name $WatchdogName
 
 # Tray icon at every logon, for every user.
 $gui = Join-Path $InstallDir 'AGS-Copy.exe'

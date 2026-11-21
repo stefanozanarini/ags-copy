@@ -183,6 +183,12 @@ public sealed class PipeServer(
                 return executor.TestPath(r, store.Get(r.JobId), lang);
             }
 
+            case Commands.ListPath:
+            {
+                var r = P<PathListRequest>();
+                return executor.ListPath(r, store.Get(r.JobId), lang);
+            }
+
             case Commands.RunReport:
             {
                 var r = P<LogRequest>();

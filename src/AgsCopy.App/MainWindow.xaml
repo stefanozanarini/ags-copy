@@ -28,6 +28,17 @@
             <TextBlock Text="{l:T err.service}" Foreground="{StaticResource Danger}" FontWeight="SemiBold" TextWrapping="Wrap" />
         </Border>
 
+        <!-- Newer version on GitHub -->
+        <Border x:Name="UpdateBanner" DockPanel.Dock="Top" Background="#E3F0FB" Padding="16,6" Visibility="Collapsed">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                    <Button x:Name="UpdateInstallButton" Content="{l:T update.install}" Style="{StaticResource PrimaryButton}" Click="UpdateInstall_Click" />
+                    <Button Content="{l:T update.notes}" Click="UpdateNotes_Click" />
+                </StackPanel>
+                <TextBlock x:Name="UpdateText" Foreground="{StaticResource Accent}" FontWeight="SemiBold" VerticalAlignment="Center" TextWrapping="Wrap" />
+            </DockPanel>
+        </Border>
+
         <!-- Scheduler paused -->
         <Border x:Name="PausedBanner" DockPanel.Dock="Top" Background="{StaticResource WarningLight}" Padding="16,8" Visibility="Collapsed">
             <TextBlock Text="{l:T main.pausedbanner}" Foreground="{StaticResource Warning}" FontWeight="SemiBold" />

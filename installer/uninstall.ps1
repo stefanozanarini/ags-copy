@@ -12,10 +12,12 @@ param(
 $ErrorActionPreference = 'Stop'
 $ServiceName = 'AGS-Copy'
 
-$service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-if ($service) {
-    if ($service.Status -ne 'Stopped') { Stop-Service -Name $ServiceName -Force }
-    & sc.exe delete $ServiceName | Out-Null
+# Watchdog first, or it starts the service again.
+foreach ($name in 'AGS-Copy-Watchdog', $ServiceName) {
+    $service = Get-Service -Name $name -ErrorAction SilentlyContinue
+    if (-not $service) { continue }
+    if ($service.Status -ne 'Stopped') { Stop-Service -Name $name -Force }
+    & sc.exe delete $name | Out-Null
 }
 Get-Process -Name 'AGS-Copy' -ErrorAction SilentlyContinue | Stop-Process -Force
 

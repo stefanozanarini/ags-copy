@@ -147,6 +147,13 @@
                         <TextBlock Text="{l:T step.destination}" Style="{StaticResource SectionTitle}" />
                         <TextBlock Text="{l:T destination.hint}" Style="{StaticResource Hint}" />
                         <ContentControl Content="{Binding}" ContentTemplate="{StaticResource EndpointTemplate}" Tag="destination" />
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="{l:T layout.card}" FontWeight="SemiBold" />
+                                <TextBlock Text="{l:T layout.card.hint}" Style="{StaticResource Hint}" />
+                                <Button Content="{l:T layout.open}" Click="Layout_Click" HorizontalAlignment="Left" />
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>

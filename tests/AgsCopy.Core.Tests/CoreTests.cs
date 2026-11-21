@@ -197,7 +197,7 @@ public class LocalizationTests
     {
         var root = RepoRoot();
         var used = new HashSet<string>();
-        var literal = new Regex("\"((?:rep|val|sum|sched|prev|preview|err|test|log|tray|main|editor|endpoint|general|source|destination|mode|options|props|kind|schedule|summary|step|history|col|outcome|trigger|run)\\.[A-Za-z0-9_.]*[A-Za-z0-9_])\"");
+        var literal = new Regex("\"((?:rep|val|sum|sched|prev|preview|err|test|log|tray|main|editor|endpoint|general|source|destination|mode|options|props|kind|schedule|summary|step|history|col|outcome|trigger|run|update|layout)\\.[A-Za-z0-9_.]*[A-Za-z0-9_])\"");
         var markup = new Regex(@"\{l:T ([A-Za-z0-9_.]+)\}");
         foreach (var file in Directory.EnumerateFiles(Path.Combine(root, "src"), "*.*", SearchOption.AllDirectories))
         {
@@ -214,6 +214,7 @@ public class LocalizationTests
         used.UnionWith(Enum.GetNames<RunTrigger>().Select(n => "trigger." + n));
         used.UnionWith(Enum.GetNames<FileProperties>().Select(n => "sum.props." + n));
         used.UnionWith(Enum.GetNames<VersionReason>().Select(n => "rep.reason." + n));
+        used.UnionWith(Enum.GetNames<LayoutFate>().Select(n => "layout.fate." + n));
         used.UnionWith(new[] { 2, 3, 5, 32, 33, 53, 64, 67, 112, 121, 1219, 1326 }.Select(c => "rep.err." + c));
 
         var it = Loc.Table("it");
@@ -238,5 +239,131 @@ public class FmtTests
         Assert.Equal("512 B", Fmt.Bytes(512, c));
         Assert.Equal("1.5 KB", Fmt.Bytes(1536, c));
         Assert.Equal("10 GB", Fmt.Bytes(10L * 1024 * 1024 * 1024, c));
+    }
+}
+
+public class WatchdogPolicyTests
+{
+    [Fact]
+    public void Starts_a_service_only_after_it_stays_stopped()
+    {
+        var p = new WatchdogPolicy();
+        Assert.Equal(WatchdogAction.None, p.Next(ServiceHealth.Stopped));
+        Assert.Equal(WatchdogAction.Start, p.Next(ServiceHealth.Stopped));
+        Assert.Equal(WatchdogAction.None, p.Next(ServiceHealth.Stopped));
+    }
+
+    [Fact]
+    public void Restarts_a_hung_service_after_three_checks_in_a_row()
+    {
+        var p = new WatchdogPolicy();
+        Assert.Equal(WatchdogAction.None, p.Next(ServiceHealth.Unresponsive));
+        Assert.Equal(WatchdogAction.None, p.Next(ServiceHealth.Unresponsive));
+        Assert.Equal(WatchdogAction.None, p.Next(ServiceHealth.Healthy));
+        Assert.Equal(WatchdogAction.None, p.Next(ServiceHealth.Unresponsive));
+        Assert.Equal(WatchdogAction.None, p.Next(ServiceHealth.Unresponsive));
+        Assert.Equal(WatchdogAction.Restart, p.Next(ServiceHealth.Unresponsive));
+    }
+
+    [Fact]
+    public void Ignored_and_healthy_never_act()
+    {
+        var p = new WatchdogPolicy();
+        for (var i = 0; i < 10; i++)
+        {
+            Assert.Equal(WatchdogAction.None, p.Next(ServiceHealth.Ignored));
+            Assert.Equal(WatchdogAction.None, p.Next(ServiceHealth.Healthy));
+        }
+    }
+
+    [Fact]
+    public void A_pending_state_that_never_ends_counts_as_hung()
+    {
+        var p = new WatchdogPolicy();
+        for (var i = 0; i < 4; i++) Assert.Equal(WatchdogAction.None, p.Next(ServiceHealth.Changing));
+        Assert.Equal(WatchdogAction.Restart, p.Next(ServiceHealth.Changing));
+    }
+}
+
+public class DestinationLayoutTests
+{
+    private static PathEntry D(string n) => new() { Name = n, IsDirectory = true };
+    private static PathEntry F(string n, long size = 10) => new() { Name = n, Size = size };
+
+    private static CopyJob Job(string src, string dst, CopyMode mode = CopyMode.Copy) => new()
+    {
+        Source = new JobEndpoint { Path = src },
+        Destination = new JobEndpoint { Path = dst },
+        Mode = mode,
+    };
+
+    [Fact]
+    public void Fates_follow_the_mode()
+    {
+        var src = new[] { D("Docs"), F("a.txt") };
+        var dst = new[] { D("Docs"), F("old.txt"), D(Versions.FolderName) };
+
+        var copy = DestinationLayout.Build(Job(@"C:\Data", @"E:\Data"), "", src, dst);
+        Assert.Equal(LayoutFate.Update, copy.Items.Single(i => i.Name == "Docs").Fate);
+        Assert.Equal(LayoutFate.New, copy.Items.Single(i => i.Name == "a.txt").Fate);
+        Assert.Equal(LayoutFate.Kept, copy.Items.Single(i => i.Name == "old.txt").Fate);
+        Assert.Equal(LayoutFate.Excluded, copy.Items.Single(i => i.Name == Versions.FolderName).Fate);
+        Assert.True(copy.Items[0].IsDirectory);
+
+        var mirror = DestinationLayout.Build(Job(@"C:\Data", @"E:\Data", CopyMode.Mirror), "", src, dst);
+        Assert.Equal(LayoutFate.Deleted, mirror.Items.Single(i => i.Name == "old.txt").Fate);
+        var job = Job(@"C:\Data", @"E:\Data", CopyMode.Mirror);
+        job.Options.KeepVersions = true;
+        Assert.Equal(LayoutFate.Archived, DestinationLayout.Build(job, "", src, dst).Items.Single(i => i.Name == "old.txt").Fate);
+    }
+
+    [Fact]
+    public void Warns_when_earlier_copies_went_into_a_subfolder_named_like_the_source()
+    {
+        Loc.Language = "en";
+        var r = DestinationLayout.Build(Job(@"C:\Data", @"E:\Backup"), "", [F("a.txt")], [D("Data")]);
+        Assert.Equal(@"E:\Backup\Data", r.Suggestion);
+        Assert.True(r.SuggestionRecommended);
+        Assert.Contains(r.Notes, n => n.Level == SummaryLevel.Warning && n.Text.Contains(@"E:\Backup\Data"));
+        Loc.Language = "it";
+    }
+
+    [Fact]
+    public void Warns_about_a_folder_one_level_too_deep()
+    {
+        var r = DestinationLayout.Build(Job(@"C:\Data", @"E:\Backup\Data"), "", [F("a.txt")], [D("Data")]);
+        Assert.Null(r.Suggestion);
+        Assert.Contains(r.Notes, n => n.Level == SummaryLevel.Warning);
+    }
+
+    [Fact]
+    public void A_mirror_into_an_unrelated_folder_is_a_danger()
+    {
+        var r = DestinationLayout.Build(Job(@"C:\Data", @"E:\Other", CopyMode.Mirror), "", [F("a.txt")], [F("x.doc"), F("y.doc")]);
+        Assert.Contains(r.Notes, n => n.Level == SummaryLevel.Danger);
+        var ok = DestinationLayout.Build(Job(@"C:\Data", @"E:\Data", CopyMode.Mirror), "", [F("a.txt")], [F("a.txt"), F("y.doc")]);
+        Assert.DoesNotContain(ok.Notes, n => n.Level != SummaryLevel.Info);
+    }
+
+    [Fact]
+    public void Roots_have_no_folder_name_to_keep()
+    {
+        Assert.Null(DestinationLayout.FolderName(@"D:\"));
+        Assert.Null(DestinationLayout.FolderName(@"\\nas\share"));
+        Assert.Equal("Data", DestinationLayout.FolderName(@"\\nas\share\Data\"));
+        Assert.Null(DestinationLayout.Build(Job(@"D:\", @"E:\Backup"), "", [F("a")], null).Suggestion);
+    }
+
+    [Fact]
+    public void Excluded_names_and_new_destination()
+    {
+        var job = Job(@"C:\Data", @"E:\Data");
+        job.Options.ExcludeFiles.Add("*.tmp");
+        job.Options.ExcludeDirectories.Add("Cache");
+        var r = DestinationLayout.Build(job, "", [F("x.tmp"), D("Cache"), F("y.doc")], null);
+        Assert.Equal(LayoutFate.Excluded, r.Items.Single(i => i.Name == "x.tmp").Fate);
+        Assert.Equal(LayoutFate.Excluded, r.Items.Single(i => i.Name == "Cache").Fate);
+        Assert.Equal(LayoutFate.New, r.Items.Single(i => i.Name == "y.doc").Fate);
+        Assert.Equal(2, r.Notes.Count(n => n.Level == SummaryLevel.Info));
     }
 }

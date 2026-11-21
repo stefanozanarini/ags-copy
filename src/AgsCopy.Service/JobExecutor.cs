@@ -434,6 +434,60 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
     }
 
     /// <summary>"Check access" in the editor: can the service reach (and, for a destination, write) the path.</summary>
+    private const int MaxListed = 2000;
+
+    /// <summary>One folder level of a source or destination, for the layout preview. Only reads.</summary>
+    public PathListResult ListPath(PathListRequest req, CopyJob? stored, string? lang)
+    {
+        var root = PathUtil.NormalizeDir(req.Endpoint.Path);
+        if (!PathUtil.IsAbsolute(root))
+            return new PathListResult { Message = Loc.Tl(lang, req.IsDestination ? "val.destination" : "val.source") };
+        var rel = req.Relative.Replace('/', '\\').Trim('\\');
+        if (rel.Split('\\').Any(p => p is "." or ".."))
+            return new PathListResult { Message = Loc.Tl(lang, "test.notfound") };
+        var path = rel.Length == 0 ? root : PathUtil.Combine(root, rel);
+
+        NetworkShare.Lease? lease = null;
+        try
+        {
+            var storedEndpoint = req.IsDestination ? stored?.Destination : stored?.Source;
+            if (req.Endpoint.IsNetwork && req.Endpoint.HasCredential)
+                lease = NetworkShare.Connect(root, req.Endpoint.Credential!.UserName, PasswordFor(req.Endpoint, storedEndpoint, lang));
+
+            var dir = new DirectoryInfo(path);
+            if (!dir.Exists) return new PathListResult { Ok = true, Message = Loc.Tl(lang, "test.notfound") };
+
+            var result = new PathListResult { Ok = true, Exists = true };
+            var options = new EnumerationOptions { IgnoreInaccessible = true, AttributesToSkip = 0, RecurseSubdirectories = false };
+            foreach (var i in dir.EnumerateFileSystemInfos("*", options))
+            {
+                result.Total++;
+                if (result.Entries.Count >= MaxListed) continue;
+                var isDir = (i.Attributes & FileAttributes.Directory) != 0;
+                result.Entries.Add(new PathEntry
+                {
+                    Name = i.Name,
+                    IsDirectory = isDir,
+                    Size = isDir ? 0 : ((FileInfo)i).Length,
+                    ModifiedUtc = i.LastWriteTimeUtc,
+                });
+            }
+            return result;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return new PathListResult { Message = Loc.Tl(lang, "test.denied") };
+        }
+        catch (Exception e) when (e is IOException or NetworkShareException or ServiceException)
+        {
+            return new PathListResult { Message = e.Message };
+        }
+        finally
+        {
+            lease?.Dispose();
+        }
+    }
+
     public PathTestResult TestPath(PathTestRequest req, CopyJob? stored, string? lang)
     {
         var path = PathUtil.NormalizeDir(req.Endpoint.Path);

@@ -1,0 +1,89 @@
+<Window x:Class="AgsCopy.App.LayoutPreviewWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:l="clr-namespace:AgsCopy.App"
+        xmlns:core="clr-namespace:AgsCopy.Core;assembly=AgsCopy.Core"
+        Style="{StaticResource AppWindow}"
+        Title="{l:T layout.title}" Width="1000" Height="640" MinWidth="700" MinHeight="420"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
+    <Window.Resources>
+        <DataTemplate x:Key="NoteTemplate" DataType="{x:Type core:SummaryLine}">
+            <Border x:Name="Box" Padding="10,6" Margin="0,0,0,4" CornerRadius="4" Background="{StaticResource AccentLight}">
+                <TextBlock x:Name="Txt" Text="{Binding Text}" TextWrapping="Wrap" />
+            </Border>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding Level}" Value="Warning">
+                    <Setter TargetName="Box" Property="Background" Value="{StaticResource WarningLight}" />
+                    <Setter TargetName="Txt" Property="Foreground" Value="{StaticResource Warning}" />
+                    <Setter TargetName="Txt" Property="FontWeight" Value="SemiBold" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding Level}" Value="Danger">
+                    <Setter TargetName="Box" Property="Background" Value="{StaticResource DangerLight}" />
+                    <Setter TargetName="Txt" Property="Foreground" Value="{StaticResource Danger}" />
+                    <Setter TargetName="Txt" Property="FontWeight" Value="SemiBold" />
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+
+        <!-- Folder and file rows; folders load their content when expanded. -->
+        <HierarchicalDataTemplate x:Key="NodeTemplate" DataType="{x:Type l:LayoutNode}" ItemsSource="{Binding Children}">
+            <StackPanel Orientation="Horizontal" Margin="0,1">
+                <TextBlock Text="{Binding Glyph}" FontFamily="Segoe MDL2 Assets" Foreground="{Binding GlyphBrush}" VerticalAlignment="Center" Margin="0,0,6,0" />
+                <TextBlock x:Name="Name" Text="{Binding Name}" VerticalAlignment="Center" />
+                <TextBlock Text="{Binding Detail}" Foreground="{StaticResource Muted}" VerticalAlignment="Center" Margin="8,0,0,0" />
+                <Border Background="{Binding BadgeBackground}" CornerRadius="3" Padding="5,0" Margin="8,0,0,0"
+                        Visibility="{Binding HasBadge, Converter={StaticResource BoolToVis}}">
+                    <TextBlock Text="{Binding Badge}" Foreground="{Binding BadgeForeground}" FontSize="11" />
+                </Border>
+            </StackPanel>
+            <HierarchicalDataTemplate.Triggers>
+                <DataTrigger Binding="{Binding Struck}" Value="True">
+                    <Setter TargetName="Name" Property="TextDecorations" Value="Strikethrough" />
+                    <Setter TargetName="Name" Property="Foreground" Value="{StaticResource Danger}" />
+                </DataTrigger>
+            </HierarchicalDataTemplate.Triggers>
+        </HierarchicalDataTemplate>
+
+        <Style TargetType="TreeViewItem">
+            <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
+        </Style>
+    </Window.Resources>
+
+    <DockPanel>
+        <Border DockPanel.Dock="Bottom" Background="{StaticResource Surface}" BorderBrush="{StaticResource Border}" BorderThickness="0,1,0,0" Padding="16,10">
+            <DockPanel>
+                <Button DockPanel.Dock="Right" Content="{l:T layout.ok}" Style="{StaticResource PrimaryButton}" IsDefault="True" IsCancel="True" Click="Ok_Click" />
+                <Button x:Name="SuggestButton" DockPanel.Dock="Left" Click="Suggest_Click" Visibility="Collapsed" HorizontalAlignment="Left" />
+            </DockPanel>
+        </Border>
+
+        <StackPanel DockPanel.Dock="Top" Margin="16,12,16,4">
+            <TextBlock Text="{l:T layout.title}" Style="{StaticResource SectionTitle}" />
+            <TextBlock Text="{l:T layout.hint}" Style="{StaticResource Hint}" />
+            <ItemsControl x:Name="Notes" ItemTemplate="{StaticResource NoteTemplate}" />
+        </StackPanel>
+
+        <Grid Margin="16,4,16,12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="16" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+            <StackPanel>
+                <TextBlock Text="{l:T layout.source}" FontWeight="SemiBold" />
+                <TextBlock x:Name="SourcePath" FontFamily="Consolas" Foreground="{StaticResource Muted}" TextTrimming="CharacterEllipsis" Margin="0,0,0,4" />
+            </StackPanel>
+            <StackPanel Grid.Column="2">
+                <TextBlock Text="{l:T layout.destination}" FontWeight="SemiBold" />
+                <TextBlock x:Name="DestinationPath" FontFamily="Consolas" Foreground="{StaticResource Muted}" TextTrimming="CharacterEllipsis" Margin="0,0,0,4" />
+            </StackPanel>
+            <TreeView x:Name="SourceTree" Grid.Row="1" ItemTemplate="{StaticResource NodeTemplate}" BorderBrush="{StaticResource Border}" />
+            <TreeView x:Name="DestinationTree" Grid.Row="1" Grid.Column="2" ItemTemplate="{StaticResource NodeTemplate}" BorderBrush="{StaticResource Border}" />
+            <TextBlock x:Name="Loading" Grid.Row="1" Grid.ColumnSpan="3" Text="{l:T layout.loading}" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{StaticResource Muted}" />
+        </Grid>
+    </DockPanel>
+</Window>

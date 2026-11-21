@@ -1,5 +1,7 @@
 # AGS-Copy
 
+[![build](https://github.com/stefanozanarini/ags-copy/actions/workflows/build.yml/badge.svg)](https://github.com/stefanozanarini/ags-copy/actions/workflows/build.yml)
+
 Windows copies and backups with **robocopy** as the engine, as a replacement for Uranium Backup.
 The interface is in Italian (default) and English.
 
@@ -7,6 +9,14 @@ The interface is in Italian (default) and English.
   summary. A job is saved only from the **summary** step. That step describes in plain words
   what is copied, where, and what is deleted. It also runs a **simulation** (`robocopy /L`) that
   lists the files to copy and the files and folders to delete.
+- **Layout preview**: when you leave the destination step (or with *Preview the layout*), a
+  window shows the source folder next to how the destination will look after the copy, folder by
+  folder, with what is new, updated, kept, deleted or excluded. Robocopy copies the *content* of
+  the source, so `C:\Data` → `E:\Backup` puts the files in `E:\Backup`, not `E:\Backup\Data`.
+  The window says so, and warns when the destination already holds a folder named like the
+  source (earlier copies went one level deeper), a `Data\Data` level too deep, or nothing in
+  common with the source (a mirror would empty it). One click switches to
+  `Destination\<source folder name>`.
 - **The source is read-only, always.** There is no move mode. Extra robocopy arguments that
   would write to the source are refused, both when the job is saved and when the command is
   built: `/MOV` and `/MOVE` delete the source after copying, and `/M` resets its archive
@@ -57,6 +67,15 @@ The interface is in Italian (default) and English.
   paused, service down). It shows a notification when a job ends, and its menu runs jobs and
   opens the configuration.
 - **History and logs** per job: the last 200 runs, with robocopy's full log and report.
+- **Watchdog**: a second service, `AGS-Copy-Watchdog`, checks the main one every minute. It
+  starts it when it has been stopped for two checks in a row, and kills and restarts it when it
+  is running but has not answered on its pipe for three checks in a row (or is stuck starting
+  or stopping). It does nothing while a Windows Installer setup runs or when `AGS-Copy` is set to
+  *Disabled*. To stop AGS-Copy on purpose, stop the watchdog first.
+- **Updates**: at every start, the configuration window and the tray icon ask GitHub for the
+  latest release. When it is newer, the window shows a banner and the tray a notification and a
+  menu entry. *Update now* downloads the `.msi`, runs it (Windows asks for an administrator) and
+  starts the tray icon again. Offline computers just skip the check.
 
 ## Architecture
 
@@ -75,6 +94,7 @@ AGS-Copy.exe --run <job id>   ──┘   JSON lines, one request per connection
 |---|---|
 | `src/AgsCopy.Core` | Job model, robocopy command builder, output parsers, preview, parallel plan, scheduling, DPAPI and network shares, pipe protocol, texts (`Loc.Strings.cs`) |
 | `src/AgsCopy.Service` | Worker service: job store, history, executor, scheduler, pipe server |
+| `src/AgsCopy.Watchdog` | Worker service that starts or restarts `AGS-Copy` when it is down or hung |
 | `src/AgsCopy.App` | WPF GUI: job list, editor, history, tray |
 | `tests/AgsCopy.Core.Tests` | xUnit tests of the Core logic (they also run on Linux) |
 
@@ -106,52 +126,64 @@ container:
 build/docker.sh build -c Release
 build/docker.sh test tests/AgsCopy.Core.Tests
 build/publish.sh            # → publish/AGS-Copy (self-contained win-x64)
-build/installer.sh          # → publish/AGS-Copy-Setup-<version>.exe (NSIS, in a Debian container)
 ```
 
-On Windows with the SDK: `dotnet build`, `dotnet test`.
+The MSI is built with WiX 5, which runs only on Windows: `build\msi.ps1 [-Version x.y.z]`
+gives `publish\AGS-Copy-<version>.msi`. On Windows with the SDK: `dotnet build`, `dotnet test`.
+
+### GitHub Actions
+
+`.github/workflows/build.yml` runs on every push and pull request:
+
+- tests on Linux;
+- the MSI on Windows, kept as a workflow artifact.
+
+A `v1.2.3` tag also publishes a GitHub release named after it, with the MSI attached. That
+release is what installed copies find when they look for updates. To release:
+
+```bash
+git tag v0.2.0 && git push origin v0.2.0
+```
 
 ## Install
 
-### Setup program (recommended)
+### MSI (recommended)
 
-Run `AGS-Copy-Setup-<version>.exe`. It asks for administrator rights, then lets you choose
-Italian or English and the folder.
-
-The setup does five things:
+Run `AGS-Copy-<version>.msi`. It installs per machine and does five things:
 
 - installs AGS-Copy in `C:\Program Files\AGS-Copy`;
-- creates and starts the `AGS-Copy` service (automatic start, restart on failure);
-- adds the tray icon to every user's logon;
+- creates and starts the `AGS-Copy` service and the `AGS-Copy-Watchdog` service (automatic
+  start, restart on failure);
+- adds the tray icon to every user's logon (it appears at the next logon);
 - adds the Start menu entry;
 - adds AGS-Copy to *Apps & features*, from where it can be uninstalled.
 
-Running a newer setup updates the installation and keeps jobs, credentials and history. When
-AGS-Copy is uninstalled, it asks whether to delete them too; the default is to keep them.
+A newer MSI upgrades the installation in place. Jobs, credentials and history live in
+`%ProgramData%\AGS-Copy`, outside the package: upgrades and removals leave them there.
 
-Unattended:
+Unattended, or through Group Policy / Intune:
 
 ```bat
-AGS-Copy-Setup-0.1.0.exe /S
-AGS-Copy-Setup-0.1.0.exe /S /D=D:\Programs\AGS-Copy
-"C:\Program Files\AGS-Copy\uninstall.exe" /S
+msiexec /i AGS-Copy-0.2.0.msi /qn
+msiexec /x AGS-Copy-0.2.0.msi /qn
 ```
 
-The silent uninstall keeps jobs, credentials and history.
+The package is not code-signed yet: SmartScreen may warn the first time.
 
 ### PowerShell scripts
 
-`publish/AGS-Copy` also holds `install.ps1` and `uninstall.ps1`, which do the same as the setup
-without a wizard. `uninstall.ps1 -RemoveData` also deletes the jobs and history.
+`publish/AGS-Copy` (from `build/publish.sh`) also holds `install.ps1` and `uninstall.ps1`, which
+install the same services without an MSI. `uninstall.ps1 -RemoveData` also deletes the jobs and
+history.
 
 ## Status
 
-This is the first version. The Core logic is covered by unit tests. The GUI, the service and
-robocopy itself have not been tried on Windows yet.
+This is the first version. The Core logic is covered by unit tests. The GUI, the services, the
+MSI and robocopy itself have not been tried on Windows yet.
 
 Planned next:
 
 - an email report after each run;
 - dated backup sets with retention;
 - scripts before and after a job;
-- an MSI package for Group Policy deployment (WiX builds only on Windows).
+- code signing of the MSI.

@@ -162,3 +162,37 @@ public class ReportBuilderTests
         Assert.DoesNotContain("[rep.", html);
     }
 }
+
+public class UpdateCheckTests
+{
+    private const string Latest = """
+        {"tag_name":"v0.3.0","html_url":"https://github.com/stefanozanarini/ags-copy/releases/tag/v0.3.0","draft":false,"prerelease":false,
+         "assets":[{"name":"AGS-Copy-0.3.0.zip","browser_download_url":"https://x/zip"},
+                   {"name":"AGS-Copy-0.3.0.msi","browser_download_url":"https://x/msi"}]}
+        """;
+
+    [Fact]
+    public void Newer_release_with_its_msi()
+    {
+        var u = Updates.UpdateCheck.Parse(Latest, new Version(0, 2, 9, 0));
+        Assert.NotNull(u);
+        Assert.Equal(new Version(0, 3, 0), u.Version);
+        Assert.Equal("https://x/msi", u.MsiUrl);
+        Assert.Equal("AGS-Copy-0.3.0.msi", u.MsiName);
+    }
+
+    [Fact]
+    public void Same_or_older_release_is_no_update()
+    {
+        Assert.Null(Updates.UpdateCheck.Parse(Latest, new Version(0, 3, 0, 0)));
+        Assert.Null(Updates.UpdateCheck.Parse(Latest, new Version(1, 0, 0)));
+        Assert.Null(Updates.UpdateCheck.Parse("""{"tag_name":"v9.0.0","prerelease":true}""", new Version(0, 1, 0)));
+        Assert.Null(Updates.UpdateCheck.Parse("""{"tag_name":"nightly"}""", new Version(0, 1, 0)));
+    }
+
+    [Theory]
+    [InlineData("v1.2.3", "1.2.3")]
+    [InlineData("1.2", "1.2.0")]
+    [InlineData("V10.0.1", "10.0.1")]
+    public void Tags(string tag, string expected) => Assert.Equal(Version.Parse(expected), Updates.UpdateCheck.ParseTag(tag));
+}

@@ -5,6 +5,7 @@ using System.Windows.Input;
 using System.Windows.Threading;
 using AgsCopy.Core.Ipc;
 using AgsCopy.Core.Models;
+using AgsCopy.Core.Updates;
 
 namespace AgsCopy.App;
 
@@ -15,6 +16,7 @@ public partial class MainWindow : Window
     private bool _online;
     private bool _refreshing;
     private bool _loadingLanguage;
+    private UpdateInfo? _update;
 
     public MainWindow()
     {
@@ -31,6 +33,7 @@ public partial class MainWindow : Window
         {
             await RefreshAsync();
             _timer.Start();
+            ShowUpdate(await Updater.CheckAsync());
         };
         Closed += (_, _) => _timer.Stop();
         UpdateButtons();
@@ -189,6 +192,36 @@ public partial class MainWindow : Window
             Ui.Error(this, ex);
         }
         await RefreshAsync();
+    }
+
+    private void ShowUpdate(UpdateInfo? update)
+    {
+        _update = update;
+        UpdateBanner.Visibility = update == null ? Visibility.Collapsed : Visibility.Visible;
+        if (update != null) UpdateText.Text = Loc.F("update.available", update.Version, UpdateCheck.Current);
+    }
+
+    private async void UpdateInstall_Click(object sender, RoutedEventArgs e)
+    {
+        if (_update == null) return;
+        if (_rows.Any(r => r.Running) && !Ui.Confirm(this, Loc.T("update.running"), danger: true)) return;
+        UpdateInstallButton.IsEnabled = false;
+        UpdateText.Text = Loc.F("update.downloading", _update.Version);
+        try
+        {
+            await Updater.InstallAsync(_update);
+        }
+        catch (Exception ex)
+        {
+            Ui.Error(this, Loc.F("update.failed", ex.Message));
+            UpdateInstallButton.IsEnabled = true;
+            ShowUpdate(_update);
+        }
+    }
+
+    private void UpdateNotes_Click(object sender, RoutedEventArgs e)
+    {
+        if (_update != null) Updater.OpenPage(_update);
     }
 
     private void Language_Changed(object sender, SelectionChangedEventArgs e)

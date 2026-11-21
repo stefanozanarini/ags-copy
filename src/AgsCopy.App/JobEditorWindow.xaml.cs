@@ -34,7 +34,50 @@ public partial class JobEditorWindow : Window
 
     private void Back_Click(object sender, RoutedEventArgs e) => _vm.Step--;
 
-    private void Next_Click(object sender, RoutedEventArgs e) => _vm.Step++;
+    private void Next_Click(object sender, RoutedEventArgs e)
+    {
+        // Leaving the destination step: show where the files will land, once per pair of paths.
+        if (_vm.Step == DestinationStep && PathUtil.IsAbsolute(_vm.Source.Path) && PathUtil.IsAbsolute(_vm.Destination.Path))
+        {
+            var pair = _vm.Source.Path + "|" + _vm.Destination.Path;
+            if (!pair.Equals(_layoutShownFor, StringComparison.OrdinalIgnoreCase))
+            {
+                _layoutShownFor = pair;
+                if (!ShowLayout()) return;
+            }
+        }
+        _vm.Step++;
+    }
+
+    private const int DestinationStep = 2;
+    private string? _layoutShownFor;
+
+    private void Layout_Click(object sender, RoutedEventArgs e)
+    {
+        if (!PathUtil.IsAbsolute(_vm.Source.Path) || !PathUtil.IsAbsolute(_vm.Destination.Path))
+        {
+            Ui.Error(this, Loc.T("layout.needpaths"));
+            return;
+        }
+        _layoutShownFor = _vm.Source.Path + "|" + _vm.Destination.Path;
+        ShowLayout();
+    }
+
+    /// <summary>Opens the preview; false when the user changed the destination from it (stay on the step).</summary>
+    private bool ShowLayout()
+    {
+        var changed = false;
+        while (true)
+        {
+            var w = new LayoutPreviewWindow(_vm.ToJob(), _vm.IsNew ? null : _vm.JobId) { Owner = this };
+            if (w.ShowDialog() != true || w.ChosenDestination is not { } chosen) return !changed;
+            // Show the new layout too: it is the one that will be saved.
+            changed = true;
+            _vm.Destination.Path = chosen;
+            _vm.Step = DestinationStep;
+            _layoutShownFor = _vm.Source.Path + "|" + _vm.Destination.Path;
+        }
+    }
 
     private async void Save_Click(object sender, RoutedEventArgs e)
     {
