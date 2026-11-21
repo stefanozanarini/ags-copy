@@ -2,8 +2,9 @@
 
 [![build](https://github.com/stefanozanarini/ags-copy/actions/workflows/build.yml/badge.svg)](https://github.com/stefanozanarini/ags-copy/actions/workflows/build.yml)
 
-Windows copies and backups with **robocopy** as the engine, as a replacement for Uranium Backup.
-The interface is in Italian (default) and English.
+Scheduled copies and backups for Windows. Local folders and Windows shares are copied with
+**robocopy**, wherever it can do the job. **SFTP** servers work too, as source or destination,
+through AGS-Copy's own copy engine. The interface is in Italian (default) and English.
 
 - **Guided job editor** in seven steps: general, source, destination, mode, options, schedule,
   summary. A job is saved only from the **summary** step. That step describes in plain words
@@ -232,3 +233,10 @@ Planned next:
 - dated backup sets with retention;
 - scripts before and after a job;
 - code signing of the MSI.
+
+## License
+
+AGS-Copy is free software, released under the GNU Affero General Public License v3.0
+(AGPL-3.0); see [LICENSE](LICENSE). Copyright © AGS Media.
+
+It uses [SSH.NET](https://github.com/sshnet/SSH.NET) (MIT) for SFTP.
