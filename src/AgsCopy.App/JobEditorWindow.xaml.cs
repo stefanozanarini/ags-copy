@@ -30,6 +30,36 @@ public partial class JobEditorWindow : Window
             NameBox.SelectAll();
         };
         Closed += (_, _) => _previewCts?.Cancel();
+        _vm.PropertyChanged += (_, e) =>
+        {
+            // The password box cannot be bound: show the typed password of the source now selected.
+            if (e.PropertyName == nameof(JobEditorViewModel.SelectedSource))
+                Dispatcher.BeginInvoke(() =>
+                {
+                    if (FindChild<PasswordBox>(SourceEditor) is { } box && box.Password != _vm.SelectedSource.Password)
+                        box.Password = _vm.SelectedSource.Password;
+                });
+        };
+    }
+
+    private static T? FindChild<T>(DependencyObject parent) where T : DependencyObject
+    {
+        for (var i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            var child = System.Windows.Media.VisualTreeHelper.GetChild(parent, i);
+            if (child is T found) return found;
+            if (FindChild<T>(child) is { } deeper) return deeper;
+        }
+        return null;
+    }
+
+    private void AddSource_Click(object sender, RoutedEventArgs e) => _vm.AddSource();
+
+    private void RemoveSource_Click(object sender, RoutedEventArgs e)
+    {
+        var s = _vm.SelectedSource;
+        if (s.Path.Trim().Length > 0 && !Ui.Confirm(this, Loc.F("sources.remove.confirm", s.Title))) return;
+        _vm.RemoveSource();
     }
 
     private void Back_Click(object sender, RoutedEventArgs e) => _vm.Step--;
@@ -37,9 +67,10 @@ public partial class JobEditorWindow : Window
     private void Next_Click(object sender, RoutedEventArgs e)
     {
         // Leaving the destination step: show where the files will land, once per pair of paths.
-        if (_vm.Step == DestinationStep && PathUtil.IsAbsolute(_vm.Source.Path) && PathUtil.IsAbsolute(_vm.Destination.Path))
+        // With several sources each has its own folder, so the classic mistake cannot happen.
+        if (_vm.Step == DestinationStep && !_vm.IsMultiSource && PathUtil.IsAbsolute(LayoutSource.Path) && PathUtil.IsAbsolute(_vm.Destination.Path))
         {
-            var pair = _vm.Source.Path + "|" + _vm.Destination.Path;
+            var pair = LayoutSource.Path + "|" + _vm.Destination.Path;
             if (!pair.Equals(_layoutShownFor, StringComparison.OrdinalIgnoreCase))
             {
                 _layoutShownFor = pair;
@@ -52,14 +83,17 @@ public partial class JobEditorWindow : Window
     private const int DestinationStep = 2;
     private string? _layoutShownFor;
 
+    /// <summary>The source the layout preview shows: the one selected in the source step.</summary>
+    private EndpointViewModel LayoutSource => _vm.SelectedSource;
+
     private void Layout_Click(object sender, RoutedEventArgs e)
     {
-        if (!PathUtil.IsAbsolute(_vm.Source.Path) || !PathUtil.IsAbsolute(_vm.Destination.Path))
+        if (!PathUtil.IsAbsolute(LayoutSource.Path) || !PathUtil.IsAbsolute(_vm.Destination.Path))
         {
             Ui.Error(this, Loc.T("layout.needpaths"));
             return;
         }
-        _layoutShownFor = _vm.Source.Path + "|" + _vm.Destination.Path;
+        _layoutShownFor = LayoutSource.Path + "|" + _vm.Destination.Path;
         ShowLayout();
     }
 
@@ -69,13 +103,15 @@ public partial class JobEditorWindow : Window
         var changed = false;
         while (true)
         {
-            var w = new LayoutPreviewWindow(_vm.ToJob(), _vm.IsNew ? null : _vm.JobId) { Owner = this };
+            var job = _vm.ToJob();
+            // Several sources: the selected one, in its own folder; the destination itself is not offered for change.
+            var w = new LayoutPreviewWindow(job.ForSource(_vm.SelectedSourceIndex), _vm.IsNew ? null : _vm.JobId, !job.MultiSource) { Owner = this };
             if (w.ShowDialog() != true || w.ChosenDestination is not { } chosen) return !changed;
             // Show the new layout too: it is the one that will be saved.
             changed = true;
             _vm.Destination.Path = chosen;
             _vm.Step = DestinationStep;
-            _layoutShownFor = _vm.Source.Path + "|" + _vm.Destination.Path;
+            _layoutShownFor = LayoutSource.Path + "|" + _vm.Destination.Path;
         }
     }
 

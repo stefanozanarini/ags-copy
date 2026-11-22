@@ -76,15 +76,18 @@ public partial class LayoutPreviewWindow : Window
 {
     private readonly CopyJob _job;
     private readonly Guid? _jobId;
+    private readonly bool _canChangeDestination;
 
     /// <summary>Destination path the user chose from the suggestion, or null.</summary>
     public string? ChosenDestination { get; private set; }
 
-    public LayoutPreviewWindow(CopyJob job, Guid? jobId)
+    /// <param name="canChangeDestination">False for one source of several: its folder is set in the source step.</param>
+    public LayoutPreviewWindow(CopyJob job, Guid? jobId, bool canChangeDestination = true)
     {
         InitializeComponent();
         _job = job;
         _jobId = jobId;
+        _canChangeDestination = canChangeDestination;
         SourcePath.Text = job.Source.Path;
         DestinationPath.Text = job.Destination.Path;
         Loaded += async (_, _) => await LoadTopAsync();
@@ -101,7 +104,7 @@ public partial class LayoutPreviewWindow : Window
             SourceTree.ItemsSource = SourceNodes("", src);
             DestinationTree.ItemsSource = DestinationNodes("", layout, src, dst);
 
-            if (layout.Suggestion != null)
+            if (layout.Suggestion != null && _canChangeDestination)
             {
                 SuggestButton.Content = Loc.F("layout.suggest", layout.Suggestion);
                 SuggestButton.Tag = layout.Suggestion;

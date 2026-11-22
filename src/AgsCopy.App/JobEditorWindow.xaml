@@ -178,10 +178,43 @@
             <!-- 2. Source -->
             <TabItem>
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <StackPanel Margin="24,18" MaxWidth="680" HorizontalAlignment="Left" DataContext="{Binding Source}">
+                    <StackPanel Margin="24,18" MaxWidth="680" HorizontalAlignment="Left">
                         <TextBlock Text="{l:T step.source}" Style="{StaticResource SectionTitle}" />
                         <TextBlock Text="{l:T source.hint}" Style="{StaticResource Hint}" />
-                        <ContentControl Content="{Binding}" ContentTemplate="{StaticResource EndpointTemplate}" Tag="source" />
+
+                        <!-- Several sources: each is copied into its own folder of the destination. -->
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="{l:T sources.title}" FontWeight="SemiBold" />
+                                <TextBlock Text="{l:T sources.hint}" Style="{StaticResource Hint}" />
+                                <ListBox ItemsSource="{Binding Sources}" SelectedItem="{Binding SelectedSource}" MaxHeight="170" Margin="0,2,0,8"
+                                         Visibility="{Binding IsMultiSource, Converter={StaticResource BoolToVis}}">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate DataType="{x:Type l:EndpointViewModel}">
+                                            <DockPanel>
+                                                <TextBlock DockPanel.Dock="Right" Foreground="{StaticResource Muted}" Margin="12,0,0,0">
+                                                    <Run Text="→ " /><Run Text="{Binding Folder, Mode=OneWay}" />
+                                                </TextBlock>
+                                                <TextBlock Text="{Binding Title}" FontFamily="Consolas" TextTrimming="CharacterEllipsis" />
+                                            </DockPanel>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                                <StackPanel Orientation="Horizontal">
+                                    <Button Content="{l:T sources.add}" Click="AddSource_Click" />
+                                    <Button Content="{l:T sources.remove}" Click="RemoveSource_Click" IsEnabled="{Binding CanRemoveSource}" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <StackPanel DataContext="{Binding SelectedSource}">
+                            <StackPanel Visibility="{Binding DataContext.IsMultiSource, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BoolToVis}}">
+                                <TextBlock Text="{l:T sources.folder}" Style="{StaticResource FieldLabel}" />
+                                <TextBox Text="{Binding Folder, UpdateSourceTrigger=LostFocus}" />
+                                <TextBlock Text="{l:T sources.folder.hint}" Style="{StaticResource Hint}" />
+                            </StackPanel>
+                            <ContentControl x:Name="SourceEditor" Content="{Binding}" ContentTemplate="{StaticResource EndpointTemplate}" Tag="source" />
+                        </StackPanel>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
@@ -283,7 +316,10 @@
                                     <ComboBoxItem Content="{l:T props.All}" />
                                 </ComboBox>
                                 <CheckBox Content="{l:T options.xo}" IsChecked="{Binding ExcludeOlder}" Margin="0,10,0,0" />
-                                <CheckBox Content="{l:T options.xj}" IsChecked="{Binding SkipJunctions}" Margin="0,6,0,0" />
+                                <CheckBox x:Name="SkipJunctionsBox" Content="{l:T options.xj}" IsChecked="{Binding SkipJunctions}" Margin="0,6,0,0" />
+                                <CheckBox Content="{l:T options.followshare}" IsChecked="{Binding FollowShareJunctions}" Margin="20,4,0,0"
+                                          IsEnabled="{Binding IsChecked, ElementName=SkipJunctionsBox}" />
+                                <TextBlock Text="{l:T options.followshare.hint}" Style="{StaticResource Hint}" Margin="20,0,0,0" />
                                 <CheckBox Content="{l:T options.fft}" IsChecked="{Binding FatFileTimes}" Margin="0,6,0,0" />
                                 <CheckBox Content="{l:T options.backup}" IsChecked="{Binding BackupMode}" Margin="0,6,0,0" />
                                 <Grid Margin="0,8,0,0">

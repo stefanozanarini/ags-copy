@@ -45,7 +45,7 @@ public sealed class ShadowCopy : IDisposable
     }
 
     /// <exception cref="ShadowCopyException">VSS refused or failed, with the reason.</exception>
-    public static async Task<ShadowCopy> CreateAsync(string localPath, Guid runId, CancellationToken ct)
+    public static async Task<ShadowCopy> CreateAsync(string localPath, string linkName, CancellationToken ct)
     {
         var volume = VolumeOf(localPath);
         await CreateLock.WaitAsync(ct);
@@ -57,7 +57,7 @@ public sealed class ShadowCopy : IDisposable
             {
                 var device = DeviceObject(id);
                 Directory.CreateDirectory(VssDir);
-                var link = Path.Combine(VssDir, runId.ToString("N"));
+                var link = Path.Combine(VssDir, linkName);
                 // The target needs its trailing backslash to open as a folder.
                 if (!CreateSymbolicLink(link, device.TrimEnd('\\') + "\\", SymbolicLinkFlagDirectory))
                     throw new ShadowCopyException(0, "Cannot link the snapshot: " + new Win32Exception().Message);

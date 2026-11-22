@@ -103,7 +103,7 @@ public partial class MainWindow : Window
         DeleteButton.IsEnabled = _online && sel is { Running: false };
         RunButton.IsEnabled = _online && sel is { Running: false };
         StopButton.IsEnabled = _online && sel is { Running: true };
-        HistoryButton.IsEnabled = _online && sel != null;
+        HistoryButton.IsEnabled = RestoreButton.IsEnabled = _online && sel != null;
         PauseButton.IsEnabled = ReportButton.IsEnabled = _online;
     }
 
@@ -134,7 +134,7 @@ public partial class MainWindow : Window
         job.Id = Guid.NewGuid();
         job.Name = Loc.F("editor.copyof", job.Name);
         // Stored passwords belong to the original job: they must be typed again.
-        foreach (var c in new[] { job.Source.Credential, job.Destination.Credential })
+        foreach (var c in job.Sources.Append(job.Destination).Select(e => e.Credential))
             if (c != null) c.HasPassword = false;
         if (new JobEditorWindow(job, isNew: true) { Owner = this }.ShowDialog() == true) await RefreshAsync();
     }
@@ -177,6 +177,11 @@ public partial class MainWindow : Window
     private void History_Click(object sender, RoutedEventArgs e)
     {
         if (Selected is { } row) new HistoryWindow(row.Id, row.Name) { Owner = this }.Show();
+    }
+
+    private void Restore_Click(object sender, RoutedEventArgs e)
+    {
+        if (Selected is { } row) new RestoreWindow(row.Id, row.Name) { Owner = this }.Show();
     }
 
     private async void Report_Click(object sender, RoutedEventArgs e)

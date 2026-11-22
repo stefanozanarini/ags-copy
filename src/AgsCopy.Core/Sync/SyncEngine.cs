@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.IO.Compression;
 using System.Globalization;
 using AgsCopy.Core.Models;
 using AgsCopy.Core.Reports;
@@ -229,7 +228,7 @@ public static class SyncEngine
             {
                 if (c.Compressed)
                 {
-                    using var gzip = new GZipStream(output, CompressionLevel.Optimal, leaveOpen: true);
+                    using var gzip = AgsGzip.Create(output);
                     input.CopyToAsync(gzip, 1 << 16, ct).GetAwaiter().GetResult();
                 }
                 else

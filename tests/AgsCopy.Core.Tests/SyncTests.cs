@@ -137,6 +137,96 @@ public sealed class SyncEngineTests : IDisposable
         Assert.False(File.Exists(Path.Combine(Dst, "x.tmp")));
     }
 
+    private string Restored(string folder, string rel) => File.ReadAllText(Path.Combine(folder, rel.Replace('/', Path.DirectorySeparatorChar)));
+
+    [Fact]
+    public async Task Restores_files_as_they_were_before_each_run()
+    {
+        var job = Job(CopyMode.Mirror, compress: true, versions: true);
+        Write(Src, "a.txt", "v1", T0);
+        Write(Src, "docs/b.txt", "b1", T0);
+        Write(Src, "dump.sql.gz", "not ours");
+        await Run(job, new DateTime(2026, 2, 1, 22, 0, 0));
+
+        Write(Src, "a.txt", "v2", T0.AddDays(1));
+        File.Delete(Path.Combine(Src, "docs", "b.txt"));
+        Write(Src, "c.txt", "c", T0.AddDays(1));
+        await Run(job, new DateTime(2026, 2, 2, 22, 0, 0));
+
+        Write(Src, "a.txt", "v3", T0.AddDays(2));
+        await Run(job, new DateTime(2026, 2, 3, 22, 0, 0));
+        var source = Hash(Src);
+
+        using var backup = new LocalSource(Dst);
+        var browser = new RestoreBrowser(backup);
+        var points = browser.Points();
+        Assert.Equal([null, "2026-02-03_220000", "2026-02-02_220000"], points.Select(p => p.Stamp));
+
+        // The names show without the .gz the engine added; the source's own .gz keeps it.
+        var top = browser.List(RestorePoint.Current, "").Select(i => i.Name).ToList();
+        Assert.Contains("a.txt", top);
+        Assert.Contains("dump.sql.gz", top);
+        Assert.DoesNotContain(Versions.FolderName, top);
+
+        string RestoreAt(RestorePoint p)
+        {
+            var target = Path.Combine(_root, "restore-" + (p.Stamp ?? "now"));
+            var r = browser.Restore(p, ["a.txt", "docs", "dump.sql.gz"], target, false, new ProgressCounter("x"), _ => { }, default);
+            Assert.Empty(r.Errors);
+            return target;
+        }
+
+        var now = RestoreAt(points[0]);
+        Assert.Equal("v3", Restored(now, "a.txt"));
+        Assert.False(Directory.Exists(Path.Combine(now, "docs", "b.txt")) || File.Exists(Path.Combine(now, "docs", "b.txt")));
+        Assert.Equal("not ours", Restored(now, "dump.sql.gz"));
+        Assert.Equal(T0.AddDays(2), File.GetLastWriteTimeUtc(Path.Combine(now, "a.txt")));
+
+        var beforeThird = RestoreAt(points[1]);
+        Assert.Equal("v2", Restored(beforeThird, "a.txt"));
+
+        var beforeSecond = RestoreAt(points[2]);
+        Assert.Equal("v1", Restored(beforeSecond, "a.txt"));
+        Assert.Equal("b1", Restored(beforeSecond, "docs/b.txt"));
+
+        Assert.Equal(source, Hash(Src));
+    }
+
+    [Fact]
+    public async Task Restore_keeps_existing_files_unless_asked()
+    {
+        Write(Src, "a.txt", "new");
+        await Run(Job());
+        var target = Path.Combine(_root, "restore");
+        Write(target, "a.txt", "mine");
+        using var backup = new LocalSource(Dst);
+        var browser = new RestoreBrowser(backup);
+
+        var kept = browser.Restore(RestorePoint.Current, ["a.txt"], target, false, new ProgressCounter("x"), _ => { }, default);
+        Assert.Equal(1, kept.Skipped);
+        Assert.Equal("mine", Restored(target, "a.txt"));
+
+        browser.Restore(RestorePoint.Current, ["a.txt"], target, true, new ProgressCounter("x"), _ => { }, default);
+        Assert.Equal("new", Restored(target, "a.txt"));
+    }
+
+    [Fact]
+    public void Only_our_gzip_files_carry_the_mark()
+    {
+        using var ours = new MemoryStream();
+        using (var w = AgsGzip.Create(ours)) w.Write("hello"u8);
+        var bytes = ours.ToArray();
+        Assert.True(AgsGzip.IsMarked(new MemoryStream(bytes)));
+        using (var z = new GZipStream(new MemoryStream(bytes), CompressionMode.Decompress))
+        using (var r = new StreamReader(z))
+            Assert.Equal("hello", r.ReadToEnd());
+
+        using var plain = new MemoryStream();
+        using (var w = new GZipStream(plain, CompressionLevel.Fastest, leaveOpen: true)) w.Write("hello"u8);
+        Assert.False(AgsGzip.IsMarked(new MemoryStream(plain.ToArray())));
+        Assert.False(AgsGzip.IsMarked(new MemoryStream("not gzip at all"u8.ToArray())));
+    }
+
     [Fact]
     public void A_name_already_taken_by_a_gz_in_the_source_stays_plain()
     {

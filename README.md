@@ -10,6 +10,33 @@ through AGS-Copy's own copy engine. The interface is in Italian (default) and En
   summary. A job is saved only from the **summary** step. That step describes in plain words
   what is copied, where, and what is deleted. It also runs a **simulation** (`robocopy /L`) that
   lists the files to copy and the files and folders to delete.
+- **Several sources per job**, each copied into a folder of its own inside the destination
+  (`E:\Backup\Data`, `E:\Backup\Mail`, …), so they never mix and a mirror of one never
+  deletes the files of another. The folder defaults to the source's own name and can be
+  changed. A job is refused when two sources overlap (one inside the other), when two would go
+  into the same folder, or when a source and the destination overlap. Each source gets its own
+  shadow copy, DFS links and versions folder, and one run covers them all: one progress bar,
+  one log, one report. With a single source, its content goes into the destination itself, as
+  before.
+- **DFS namespaces**: a `\\domain\namespace\...` source is followed through its links.
+  Robocopy sees DFS links as junctions, so `/XJ` would skip them, and the copy engine leaves
+  reparse points out. AGS-Copy therefore asks the Windows DFS client which folders below the
+  source are links and copies each one, from the share it points to, into the same place in the
+  destination. The rest of the source is copied without the links, which are excluded on both
+  sides, so a mirror never deletes their copies. The link targets are connected with the source's
+  credentials. A source already inside a link needs nothing: the DFS client follows it. Through
+  DFS two names can be the same folder, so runs and restores also compare the real shares
+  behind the paths: a source is never copied into itself, and nothing is restored into a source.
+- **Junctions on shares**: robocopy's `/XJ` (on by default) skips junctions and symbolic links,
+  which avoids loops. On a `\\server\share` source, directory junctions are followed all the
+  same (option *On network shares, follow directory junctions anyway*, on by default). The file
+  server resolves them on its own disks, so a junction to another disk of the server brings that
+  folder into the copy. Robocopy is not left to follow them, since a junction that points back to
+  a folder above it would loop. Before each copy AGS-Copy walks the share and finds the junctions.
+  It compares folder identities (volume and file id) to leave out the loops, then copies each
+  junction as a source of its own, as it does for DFS links. Symbolic links stay excluded. The
+  walk adds a pass over the share's folders to each run. Without `/XJ`, robocopy and the engine
+  follow everything themselves.
 - **Layout preview**: when you leave the destination step (or with *Preview the layout*), a
   window shows the source folder next to how the destination will look after the copy, folder by
   folder, with what is new, updated, kept, deleted or excluded. Robocopy copies the *content* of
@@ -37,6 +64,18 @@ through AGS-Copy's own copy engine. The interface is in Italian (default) and En
   - A `robocopy /L` pass decides what to move.
   - Version folders older than the retention (days, 0 = forever) are deleted after each run.
   - The versions folder is always excluded from robocopy, so a mirror never purges it.
+- **Restore** (*Restore…* in the main window):
+  - Choose a moment: now, or "before the backup of …" for each run that kept versions. The
+    backup is rebuilt as it was then: each item comes from the earliest versions folder from
+    that run on, otherwise from the current copy.
+  - Tick files and folders, and pick a folder to restore into. Files come back with their
+    paths and original dates, and the `.gz` files AGS-Copy wrote are unpacked.
+  - The backup is only read. Restoring into the job's source, which is always read-only, or
+    into the backup itself is refused.
+  - A job with several sources shows one folder per source. A restore point covers them all,
+    because one run archives every source under the same date.
+  - AGS-Copy's `.gz` files carry the gzip comment `AGS-Copy`, so a `.gz` that was already in
+    the source comes back as it was.
 - **HTML reports**: every run writes a page to `%ProgramData%\AGS-Copy\reports\<job>\`, and
   an `index.html` shows all jobs.
   - A run page has outcome, duration, speed and files copied, skipped and failed. Errors are
@@ -166,8 +205,23 @@ which runs only on Windows: `build\package.ps1 [-Version x.y.z]` gives
 
 `.github/workflows/build.yml` runs on every push and pull request:
 
-- tests on Linux;
-- the MSI and the portable exe on Windows, kept as workflow artifacts.
+- tests on Linux, including SFTP against a throwaway `atmoz/sftp` container: host key check,
+  backup with compression and versions, restore from SFTP, copy from SFTP;
+- the MSI and the portable exe on Windows, kept as workflow artifacts;
+- `build/e2e.ps1` on the same Windows runner. It drives the installed service over its pipe:
+  - installs the MSI and starts the services;
+  - runs a mirror job with versions and compression, with a file held open, and checks the
+    shadow copy, the NTFS compression and the reports;
+  - changes the source and checks the versions;
+  - restores the earlier state, and checks that restoring into the source is refused;
+  - saves a job with two sources: overlapping sources and a shared folder are refused. It then
+    runs the job twice and restores both sources from one restore point;
+  - shares a folder over SMB with a junction to another folder and one back to the share itself,
+    then checks that the first is copied and the loop is not;
+  - stops the service and waits for the watchdog to restart it;
+  - uninstalls.
+
+  A failed check stops the release.
 
 A `v1.2.3` tag also publishes a GitHub release named after it, with both attached. That
 release is what installed copies find when they look for updates. To release:

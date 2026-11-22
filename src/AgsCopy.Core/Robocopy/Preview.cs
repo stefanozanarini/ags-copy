@@ -51,6 +51,30 @@ public sealed class PreviewResult
 
     /// <summary>Extras are deleted only in Mirror mode.</summary>
     public bool ExtrasDeleted => Mode == CopyMode.Mirror;
+
+    /// <summary>
+    /// Adds the preview of another part of the same job (another source, a DFS link) to this one.
+    /// </summary>
+    public void Merge(PreviewResult other)
+    {
+        FilesToCopy += other.FilesToCopy;
+        BytesToCopy += other.BytesToCopy;
+        ExtraFiles += other.ExtraFiles;
+        ExtraBytes += other.ExtraBytes;
+        ExtraDirs += other.ExtraDirs;
+        FilesUnchanged += other.FilesUnchanged;
+        BytesUnchanged += other.BytesUnchanged;
+        CopyItemsTruncated |= other.CopyItemsTruncated || CopyItems.Count + other.CopyItems.Count > MaxCopyItems;
+        ExtraItemsTruncated |= other.ExtraItemsTruncated || ExtraItems.Count + other.ExtraItems.Count > MaxDeleteItems;
+        CopyItems.AddRange(other.CopyItems.Take(Math.Max(0, MaxCopyItems - CopyItems.Count)));
+        ExtraItems.AddRange(other.ExtraItems.Take(Math.Max(0, MaxDeleteItems - ExtraItems.Count)));
+        DestinationExists &= other.DestinationExists;
+        ExitCode |= other.ExitCode;
+        if (other.Error != null) Error = Error == null ? other.Error : Error + Environment.NewLine + other.Error;
+        if (other.CommandLine != null) CommandLine = CommandLine == null ? other.CommandLine : CommandLine + Environment.NewLine + other.CommandLine;
+        if (Source != other.Source) Source += Environment.NewLine + other.Source;
+        KeepVersions |= other.KeepVersions;
+    }
 }
 
 /// <summary>Builds a <see cref="PreviewResult"/> from the lines of a robocopy /L run.</summary>

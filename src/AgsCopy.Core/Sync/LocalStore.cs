@@ -1,7 +1,8 @@
 namespace AgsCopy.Core.Sync;
 
 /// <summary>A local or \\server\share folder (the share already connected by the caller).</summary>
-public class LocalSource(string root) : ISourceStore
+/// <param name="followLinks">Go through junctions and symbolic links; by default they are left out.</param>
+public class LocalSource(string root, bool followLinks = false) : ISourceStore
 {
     /// <summary>The folder as given (the service passes normalized Windows paths; tests pass Linux ones).</summary>
     protected string Root { get; } = root.Length > 3 ? root.TrimEnd('\\', '/') : root;
@@ -15,7 +16,7 @@ public class LocalSource(string root) : ISourceStore
 
     public IReadOnlyList<SyncEntry> List(string relative)
     {
-        var options = new EnumerationOptions { AttributesToSkip = FileAttributes.ReparsePoint, IgnoreInaccessible = false, RecurseSubdirectories = false };
+        var options = new EnumerationOptions { AttributesToSkip = followLinks ? 0 : FileAttributes.ReparsePoint, IgnoreInaccessible = false, RecurseSubdirectories = false };
         var list = new List<SyncEntry>();
         foreach (var i in new DirectoryInfo(Full(relative)).EnumerateFileSystemInfos("*", options))
         {

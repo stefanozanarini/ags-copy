@@ -100,7 +100,7 @@ public sealed class ReportStore
             {
                 JobName = j.Name,
                 Mode = j.Mode,
-                Source = j.Source.Path,
+                Source = j.SourceSummary,
                 Destination = j.Destination.Path,
                 Enabled = j.Enabled,
                 Schedule = WithLanguage(() => JobDescriber.DescribeSchedule(j.Schedule)),

@@ -21,9 +21,23 @@ public static class JobDescriber
         var lines = new List<SummaryLine>();
         void Add(SummaryLevel l, string key, params object?[] a) => lines.Add(new SummaryLine(l, Loc.F(key, a)));
 
-        var src = PathUtil.NormalizeDir(job.Source.Path);
+        var sources = job.Sources;
+        var src = string.Join(", ", sources.Select(x => PathUtil.NormalizeDir(x.Path)));
         var dst = PathUtil.NormalizeDir(job.Destination.Path);
-        Add(SummaryLevel.Info, "sum.what", src, dst);
+        if (!job.MultiSource)
+        {
+            Add(SummaryLevel.Info, "sum.what", src, dst);
+        }
+        else
+        {
+            Add(SummaryLevel.Info, "sum.what.multi", sources.Count, dst);
+            for (var i = 0; i < sources.Count; i++)
+                Add(SummaryLevel.Info, "sum.what.item", PathUtil.NormalizeDir(sources[i].Path), PathUtil.NormalizeDir(job.DestinationFor(i)));
+        }
+        // With several sources each mirror and each versions folder stays inside that source's folder.
+        var targets = job.MultiSource
+            ? string.Join(", ", sources.Select((_, i) => PathUtil.NormalizeDir(job.DestinationFor(i))))
+            : dst;
 
         switch (job.Mode)
         {
@@ -31,38 +45,43 @@ public static class JobDescriber
                 Add(SummaryLevel.Info, "sum.mode.copy");
                 break;
             case CopyMode.Mirror when job.Options.KeepVersions:
-                Add(SummaryLevel.Danger, "sum.mode.mirror.versions", dst, src);
+                Add(SummaryLevel.Danger, "sum.mode.mirror.versions", targets, src);
                 break;
             case CopyMode.Mirror:
-                Add(SummaryLevel.Danger, "sum.mode.mirror", dst, src);
+                Add(SummaryLevel.Danger, "sum.mode.mirror", targets, src);
                 break;
         }
         if (job.Options.KeepVersions)
         {
-            var folder = Versions.Root(dst) + "\\";
+            var folder = job.MultiSource
+                ? string.Join(", ", sources.Select((_, i) => Versions.Root(PathUtil.NormalizeDir(job.DestinationFor(i))) + "\\"))
+                : Versions.Root(dst) + "\\";
             if (job.Options.VersionRetentionDays > 0) Add(SummaryLevel.Info, "sum.versions", folder, job.Options.VersionRetentionDays);
             else Add(SummaryLevel.Info, "sum.versions.forever", folder);
         }
         Add(SummaryLevel.Info, "sum.readonly", src);
-        if (job.Source.IsSftp)
+        var local = sources.Where(x => !x.IsRemote).Select(x => PathUtil.NormalizeDir(x.Path)).ToList();
+        if (job.Options.UseShadowCopy)
         {
-            // Shadow copies are a Windows matter.
+            if (sources.Any(x => x.IsNetwork)) Add(SummaryLevel.Warning, "sum.vss.network");
+            if (local.Count > 0)
+                Add(SummaryLevel.Info, "sum.vss", string.Join(", ", local.Select(x => x.Length >= 2 ? x[..2] : x).Distinct(StringComparer.OrdinalIgnoreCase))); // the drives, D:
         }
-        else if (job.Options.UseShadowCopy)
-        {
-            if (job.Source.IsNetwork) Add(SummaryLevel.Warning, "sum.vss.network");
-            else Add(SummaryLevel.Info, "sum.vss", src.Length >= 2 ? src[..2] : src); // the drive, D:
-        }
-        else if (!job.Source.IsNetwork)
+        else if (local.Count > 0)
         {
             Add(SummaryLevel.Info, "sum.novss");
         }
+        if (sources.Any(x => x.IsNetwork))
+        {
+            Add(SummaryLevel.Info, "sum.dfs");
+            if (sources.Any(job.Options.FollowsJunctionsOn)) Add(SummaryLevel.Info, "sum.junctions.share");
+        }
 
-        AddEndpoint(job.Source, "sum.net.source");
+        foreach (var x in sources) AddEndpoint(x, "sum.net.source");
         AddEndpoint(job.Destination, "sum.net.destination");
 
         var o = job.Options;
-        var sftp = job.Source.IsSftp || job.Destination.IsSftp;
+        var sftp = sources.Any(x => x.IsSftp) || job.Destination.IsSftp;
         if (sftp) Add(SummaryLevel.Warning, "sum.engine.sftp");
         if (o.Compress) Add(SummaryLevel.Info, job.Destination.IsSftp ? "sum.compress.gz" : "sum.compress", Compression.Suffix);
         if (o.ExcludeFiles.Count > 0) Add(SummaryLevel.Info, "sum.xf", string.Join(", ", o.ExcludeFiles));

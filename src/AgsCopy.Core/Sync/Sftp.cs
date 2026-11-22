@@ -1,13 +1,11 @@
 using System.Text;
-using AgsCopy.Core;
 using AgsCopy.Core.Credentials;
 using AgsCopy.Core.Ipc;
 using AgsCopy.Core.Models;
-using AgsCopy.Core.Sync;
 using Renci.SshNet;
 using Renci.SshNet.Common;
 
-namespace AgsCopy.Service;
+namespace AgsCopy.Core.Sync;
 
 /// <summary>Connections to SFTP endpoints, with the server's host key checked against the one recorded.</summary>
 public static class Sftp
@@ -91,15 +89,19 @@ public static class Sftp
         var c = e.Credential!;
         var s = stored?.Credential is { } sc && string.Equals(sc.UserName, c.UserName, StringComparison.OrdinalIgnoreCase) ? sc : null;
         var password = !string.IsNullOrEmpty(c.Password) ? c.Password
-            : !string.IsNullOrEmpty(c.ProtectedPassword) ? CredentialProtector.Unprotect(c.ProtectedPassword)
-            : s?.ProtectedPassword is { } p ? CredentialProtector.Unprotect(p)
+            : !string.IsNullOrEmpty(c.ProtectedPassword) ? Unprotect(c.ProtectedPassword)
+            : s?.ProtectedPassword is { } p ? Unprotect(p)
             : null;
         var key = !string.IsNullOrEmpty(c.PrivateKey) ? c.PrivateKey
-            : !string.IsNullOrEmpty(c.ProtectedPrivateKey) ? CredentialProtector.Unprotect(c.ProtectedPrivateKey)
-            : c.HasPrivateKey && s?.ProtectedPrivateKey is { } k ? CredentialProtector.Unprotect(k)
+            : !string.IsNullOrEmpty(c.ProtectedPrivateKey) ? Unprotect(c.ProtectedPrivateKey)
+            : c.HasPrivateKey && s?.ProtectedPrivateKey is { } k ? Unprotect(k)
             : null;
         return (password, key);
     }
+
+    /// <summary>Stored secrets exist only on Windows (DPAPI); tests elsewhere pass them in clear.</summary>
+    private static string Unprotect(string value) =>
+        OperatingSystem.IsWindows() ? CredentialProtector.Unprotect(value) : throw new PlatformNotSupportedException("DPAPI");
 }
 
 /// <summary>A folder on an SFTP server, as source or destination of the copy engine.</summary>

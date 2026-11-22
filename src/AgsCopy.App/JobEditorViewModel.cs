@@ -22,10 +22,13 @@ public sealed class EndpointViewModel : ObservableObject
     private string _keyName = "";
     private bool _hasStoredKey;
     private readonly SftpLocation? _originalServer;
+    private string? _folder;
 
     public EndpointViewModel(JobEndpoint e)
     {
         _path = e.Path;
+        // A folder equal to the default keeps following the path; a typed one stays.
+        if (!string.IsNullOrEmpty(e.Folder) && !e.Folder.Equals(DefaultFolder(e.Path), StringComparison.OrdinalIgnoreCase)) _folder = e.Folder;
         _userName = e.Credential?.UserName ?? "";
         HasStoredPassword = e.Credential?.HasPassword == true;
         _hasStoredKey = e.Credential?.HasPrivateKey == true;
@@ -43,6 +46,8 @@ public sealed class EndpointViewModel : ObservableObject
             OnPropertyChanged(nameof(IsSftp));
             OnPropertyChanged(nameof(IsRemote));
             OnPropertyChanged(nameof(IsLocal));
+            OnPropertyChanged(nameof(Folder));
+            OnPropertyChanged(nameof(Title));
             MappedUnc = NetworkDrives.ToUnc(value);
             // A recorded host key belongs to one server: another host or port must be checked again.
             var now = SftpLocation.TryParse(value);
@@ -51,6 +56,27 @@ public sealed class EndpointViewModel : ObservableObject
             TestResult = "";
         }
     }
+
+    /// <summary>
+    /// Sources of a job with several sources: the folder of the destination this one goes into.
+    /// Until typed, it follows the source's own folder name.
+    /// </summary>
+    public string Folder
+    {
+        get => _folder ?? DefaultFolder(_path);
+        set
+        {
+            var v = value.Trim();
+            _folder = v.Length == 0 || v.Equals(DefaultFolder(_path), StringComparison.OrdinalIgnoreCase) ? null : v;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(Title));
+        }
+    }
+
+    private static string DefaultFolder(string path) => PathUtil.IsAbsolute(path) ? CopyJob.DefaultFolder(path) : "";
+
+    /// <summary>The row of the source list.</summary>
+    public string Title => _path.Trim().Length == 0 ? Loc.T("sources.new") : PathUtil.NormalizeDir(_path);
 
     public bool IsLocal => !IsRemote;
     public bool IsSftp => PathUtil.IsSftp(_path);
@@ -172,7 +198,7 @@ public sealed class EndpointViewModel : ObservableObject
 
     public JobEndpoint ToEndpoint()
     {
-        var e = new JobEndpoint { Path = PathUtil.NormalizeDir(_path), HostKey = IsSftp ? _hostKey : null };
+        var e = new JobEndpoint { Path = PathUtil.NormalizeDir(_path), HostKey = IsSftp ? _hostKey : null, Folder = Folder };
         if (IsRemote && !string.IsNullOrWhiteSpace(_userName))
         {
             e.Credential = new StoredCredential
@@ -234,7 +260,13 @@ public sealed class JobEditorViewModel : ObservableObject
         IsNew = isNew;
         _name = job.Name;
         _enabled = job.Enabled;
-        Source = new EndpointViewModel(job.Source);
+        Sources = new ObservableCollection<EndpointViewModel>(job.Sources.Select(e => new EndpointViewModel(e)));
+        _selectedSource = Sources[0];
+        Sources.CollectionChanged += (_, _) =>
+        {
+            OnPropertyChanged(nameof(IsMultiSource));
+            OnPropertyChanged(nameof(CanRemoveSource));
+        };
         Destination = new EndpointViewModel(job.Destination);
         _mode = job.Mode;
 
@@ -252,6 +284,7 @@ public sealed class JobEditorViewModel : ObservableObject
         VersionRetentionDays = o.VersionRetentionDays;
         ExcludeOlder = o.ExcludeOlder;
         SkipJunctions = o.SkipJunctions;
+        FollowShareJunctions = o.FollowShareJunctions;
         FatFileTimes = o.FatFileTimes;
         _fileProperties = (int)o.FileProperties;
         ExcludeFiles = string.Join(Environment.NewLine, o.ExcludeFiles);
@@ -300,7 +333,39 @@ public sealed class JobEditorViewModel : ObservableObject
     public bool Enabled { get => _enabled; set => Set(ref _enabled, value); }
 
     // Endpoints
-    public EndpointViewModel Source { get; }
+    /// <summary>The sources; with more than one, each goes into its own folder of the destination.</summary>
+    public ObservableCollection<EndpointViewModel> Sources { get; }
+
+    private EndpointViewModel _selectedSource;
+
+    /// <summary>The source shown for editing.</summary>
+    public EndpointViewModel SelectedSource
+    {
+        get => _selectedSource;
+        set
+        {
+            if (value != null) Set(ref _selectedSource, value);
+        }
+    }
+
+    public int SelectedSourceIndex => Math.Max(0, Sources.IndexOf(_selectedSource));
+    public bool IsMultiSource => Sources.Count > 1;
+    public bool CanRemoveSource => Sources.Count > 1;
+
+    public void AddSource()
+    {
+        var e = new EndpointViewModel(new JobEndpoint());
+        Sources.Add(e);
+        SelectedSource = e;
+    }
+
+    public void RemoveSource()
+    {
+        if (Sources.Count <= 1) return;
+        var i = SelectedSourceIndex;
+        Sources.RemoveAt(i);
+        SelectedSource = Sources[Math.Min(i, Sources.Count - 1)];
+    }
     public EndpointViewModel Destination { get; }
 
     // Mode
@@ -383,6 +448,7 @@ public sealed class JobEditorViewModel : ObservableObject
         : Loc.F("mode.Mirror.versions.on", _versionRetentionDays);
     public bool ExcludeOlder { get; set; }
     public bool SkipJunctions { get; set; }
+    public bool FollowShareJunctions { get; set; }
     public bool FatFileTimes { get; set; }
     public int FileProperties { get => _fileProperties; set => Set(ref _fileProperties, value); }
     public string ExcludeFiles { get; set; }
@@ -490,7 +556,10 @@ public sealed class JobEditorViewModel : ObservableObject
         var job = Json.Clone(_original);
         job.Name = _name.Trim();
         job.Enabled = _enabled;
-        job.Source = Source.ToEndpoint();
+        var sources = Sources.Select(s => s.ToEndpoint()).ToList();
+        job.Source = sources[0];
+        job.ExtraSources = sources.Skip(1).ToList();
+        if (sources.Count == 1) job.Source.Folder = null;
         job.Destination = Destination.ToEndpoint();
         job.Mode = _mode;
         job.DeletionConfirmed = _deletionConfirmed;
@@ -509,6 +578,7 @@ public sealed class JobEditorViewModel : ObservableObject
         o.VersionRetentionDays = VersionRetentionDays;
         o.ExcludeOlder = ExcludeOlder;
         o.SkipJunctions = SkipJunctions;
+        o.FollowShareJunctions = FollowShareJunctions;
         o.FatFileTimes = FatFileTimes;
         o.FileProperties = (FileProperties)_fileProperties;
         o.ExcludeFiles = Lines(ExcludeFiles);

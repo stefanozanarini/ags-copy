@@ -27,7 +27,15 @@ public sealed class CopyJob
     public Guid Id { get; set; } = Guid.NewGuid();
     public string Name { get; set; } = "";
     public bool Enabled { get; set; } = true;
+    /// <summary>The first (often the only) source.</summary>
     public JobEndpoint Source { get; set; } = new();
+
+    /// <summary>
+    /// Further sources. With more than one source each goes into its own folder of the destination
+    /// (<see cref="JobEndpoint.Folder"/>), so they never mix or delete each other's files.
+    /// </summary>
+    public List<JobEndpoint> ExtraSources { get; set; } = [];
+
     public JobEndpoint Destination { get; set; } = new();
     public CopyMode Mode { get; set; } = CopyMode.Copy;
     public CopyOptions Options { get; set; } = new();
@@ -43,12 +51,55 @@ public sealed class CopyJob
 
     [JsonIgnore]
     public bool DeletesFiles => Mode == CopyMode.Mirror;
+
+    [JsonIgnore]
+    public IReadOnlyList<JobEndpoint> Sources => [Source, .. ExtraSources];
+
+    [JsonIgnore]
+    public bool MultiSource => ExtraSources.Count > 0;
+
+    /// <summary>For lists: the first source, and how many more there are.</summary>
+    [JsonIgnore]
+    public string SourceSummary => MultiSource ? $"{Source.Path} (+{ExtraSources.Count})" : Source.Path;
+
+    /// <summary>Where source <paramref name="index"/> goes: the destination, or its own folder in it.</summary>
+    public string DestinationFor(int index) => MultiSource
+        ? PathUtil.Combine(Destination.Path, Sources[index].Folder ?? "")
+        : Destination.Path;
+
+    /// <summary>
+    /// The job reduced to one of its sources, copied into <see cref="DestinationFor"/>: that is how a
+    /// run, a preview and a restore handle each source.
+    /// </summary>
+    public CopyJob ForSource(int index)
+    {
+        var j = Json.Clone(this);
+        j.Source = j.Sources[index];
+        j.ExtraSources = [];
+        j.Destination.Path = DestinationFor(index);
+        return j;
+    }
+
+    /// <summary>Default folder for a source: its last folder name (the server for a share root, "root" for a drive).</summary>
+    public static string DefaultFolder(string sourcePath)
+    {
+        if (DestinationLayout.FolderName(sourcePath) is { Length: > 0 } name) return name;
+        if (PathUtil.Server(sourcePath) is { } server) return server + "-" + PathUtil.LastName(sourcePath);
+        if (SftpLocation.TryParse(sourcePath) is { } s) return s.Host;
+        var p = PathUtil.NormalizeDir(sourcePath);
+        return p.Length >= 1 && char.IsAsciiLetter(p[0]) ? "Drive-" + char.ToUpperInvariant(p[0]) : "Source";
+    }
 }
 
 public sealed class JobEndpoint
 {
     public string Path { get; set; } = "";
     public StoredCredential? Credential { get; set; }
+
+    /// <summary>
+    /// Sources of a job with several sources: the folder of the destination this one is copied into.
+    /// </summary>
+    public string? Folder { get; set; }
 
     /// <summary>For SFTP: the server's host key fingerprint ("SHA256:..."), recorded by the access check.</summary>
     public string? HostKey { get; set; }
@@ -157,6 +208,16 @@ public sealed class CopyOptions
 
     /// <summary>/XJ — skip junctions and symbolic links (avoids loops).</summary>
     public bool SkipJunctions { get; set; } = true;
+
+    /// <summary>
+    /// With <see cref="SkipJunctions"/>: on a \\server\share source, directory junctions are followed
+    /// all the same (the file server resolves them on its own disks), except those that lead back to a
+    /// folder they are in. See <see cref="LinkedFolders"/>.
+    /// </summary>
+    public bool FollowShareJunctions { get; set; } = true;
+
+    /// <summary>Whether a run looks for junctions to follow below a share source.</summary>
+    public bool FollowsJunctionsOn(JobEndpoint source) => SkipJunctions && FollowShareJunctions && source.IsNetwork;
 
     /// <summary>/FFT — 2-second timestamp tolerance, for NAS and non-NTFS destinations.</summary>
     public bool FatFileTimes { get; set; }

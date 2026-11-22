@@ -22,7 +22,7 @@ public sealed class Exclusions(CopyJob job)
         {
             if (p.Contains('\\') || p.Contains('/'))
             {
-                if (PathUtil.Combine(_source, relative).Equals(PathUtil.NormalizeDir(p), StringComparison.OrdinalIgnoreCase)) return true;
+                if (PathUtil.Combine(_source, PathUtil.IsSftp(_source) ? relative : relative.Replace('/', '\\')).Equals(PathUtil.NormalizeDir(p), StringComparison.OrdinalIgnoreCase)) return true;
             }
             else if (FileSystemName.MatchesSimpleExpression(p, name, ignoreCase: true))
             {

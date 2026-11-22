@@ -17,7 +17,7 @@ public interface ISourceStore : IDisposable
 
     bool Exists();
 
-    /// <summary>Items directly inside a folder ("" = the root). Links and reparse points are left out.</summary>
+    /// <summary>Items directly inside a folder ("" = the root). Links and reparse points are left out, unless the store follows them.</summary>
     IReadOnlyList<SyncEntry> List(string relative);
 
     Stream OpenRead(string relative);

@@ -91,134 +91,49 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
         history.Put(record);
         log.LogInformation("Job {Name} started ({Trigger})", job.Name, record.Trigger);
 
-        var src = PathUtil.NormalizeDir(job.Source.Path);
         var dst = PathUtil.NormalizeDir(job.Destination.Path);
         var parts = new List<(string Label, string Command, string File)>();
         var leases = new List<NetworkShare.Lease>();
         var notes = new List<string>();
         var versions = new ArchiveResult();
-        SyncResult? engineResult = null;
-        ShadowCopy? snapshot = null;
+        var engineResults = new List<SyncResult>();
+        var snapshots = new Dictionary<string, ShadowCopy>(StringComparer.OrdinalIgnoreCase);
+        var runs = new List<SourceRun>();
         try
         {
             leases.AddRange(Connect(job, null, null));
-            if (!job.Source.IsSftp && !Directory.Exists(src)) throw new ServiceException(Loc.Fl(lang, "err.nosource", src));
 
-            // From here on runJob reads the source from the snapshot, when there is one.
-            var runJob = job;
-            if (job.Options.UseShadowCopy && !job.Source.IsRemote)
+            // Every source is prepared and scanned first, so the progress bar knows the whole run.
+            // With several sources one that cannot be read does not stop the others.
+            var failed = 0;
+            for (var i = 0; i < job.Sources.Count; i++)
             {
+                var part = job.ForSource(i);
+                var label = job.MultiSource ? $"[{part.Source.Folder}] " : "";
                 try
                 {
-                    snapshot = await ShadowCopy.CreateAsync(src, record.Id, ct);
-                    runJob = SnapshotPaths.ForSnapshot(job, snapshot.VolumeRoot, snapshot.LinkPath);
-                    notes.Add(Loc.Fl(lang, "run.vss", snapshot.VolumeRoot, runJob.Source.Path));
-                    log.LogInformation("Job {Name}: shadow copy {Id} of {Volume}", job.Name, snapshot.ShadowId, snapshot.VolumeRoot);
+                    runs.Add(await PrepareAsync(part, i, label, rj, snapshots, leases, notes, lang, ct));
                 }
-                catch (Exception e) when (e is ShadowCopyException or ManagementException or Win32Exception or UnauthorizedAccessException or IOException)
+                catch (Exception e) when (job.MultiSource && e is not OperationCanceledException)
                 {
-                    // Copy anyway: everything but the open files still gets copied.
-                    rj.ShadowCopyFailed = true;
-                    notes.Add(Loc.Fl(lang, "run.vss.failed", e.Message));
-                    log.LogWarning(e, "Job {Name}: shadow copy failed, copying without it", job.Name);
+                    failed++;
+                    notes.Add(label + e.Message);
+                    log.LogError(e, "Job {Name}: source {Source} failed", job.Name, part.Source.Path);
                 }
             }
-            src = PathUtil.NormalizeDir(runJob.Source.Path);
+            rj.TotalFiles = runs.Sum(r => r.TotalFiles);
+            rj.TotalBytes = runs.Sum(r => r.TotalBytes);
+            rj.Scanning = false;
 
-            if (UsesEngine(job, dst, lang, out var engineNote))
+            foreach (var run in runs)
             {
-                notes.Add(engineNote!);
-                engineResult = await RunEngineAsync(job, runJob, rj, src, dst, startLocal, Path.Combine(logDir, $"{stamp}-engine.part"), parts, notes, lang, ct);
+                ct.ThrowIfCancellationRequested();
+                if (run.Plan != null)
+                    engineResults.Add(await RunEngineAsync(run, rj, startLocal, Path.Combine(logDir, $"{stamp}-{run.Index:00}-engine.part"), parts, notes, lang, ct));
+                else
+                    await RunRobocopyAsync(run, rj, startLocal, logDir, stamp, parts, notes, versions, lang, ct);
             }
-            else
-            {
-                var names = job.Options.AutoTune || job.Options.Processes > 1 ? TopLevelFolders(src, job.Options.SkipJunctions) : [];
-                if (job.Options.AutoTune)
-                {
-                    var tune = AutoTune.Compute(await ResourceProbe.MeasureAsync(ct), IsNetwork(job), names.Count);
-                    runJob = Json.Clone(runJob);
-                    runJob.Options.Processes = tune.Processes;
-                    runJob.Options.Threads = tune.Threads;
-                    notes.Add(DescribeTune(tune, lang));
-                    log.LogInformation("Job {Name}: auto-tuned to {Processes} processes x {Threads} threads", job.Name, tune.Processes, tune.Threads);
-                }
-
-                // One robocopy /L pass gives the totals for the progress bar and what versions must keep.
-                var listFile = await ListAsync(runJob, src, dst, ct);
-                try
-                {
-                    var totals = new PreviewAggregator(src, dst, job.Mode);
-                    foreach (var line in File.Exists(listFile) ? File.ReadLines(listFile) : []) totals.Add(line);
-                    rj.TotalFiles = totals.Result.FilesToCopy;
-                    rj.TotalBytes = totals.Result.BytesToCopy;
-                    rj.Scanning = false;
-
-                    if (job.Options.KeepVersions && Directory.Exists(dst))
-                    {
-                        versions = ArchiveVersions(runJob, listFile, src, dst, startLocal, ct);
-                        record.VersionsArchived = versions.Count;
-                        if (versions.Count > 0) notes.Add(Loc.Fl(lang, "run.versions", Fmt.Count(versions.Count, Loc.CultureOf(lang)), versions.Folder));
-                    }
-                }
-                finally
-                {
-                    try { File.Delete(listFile); } catch (IOException) { }
-                }
-
-                var tasks = ParallelPlan.Build(runJob, names);
-                var consoleSource = RobocopyProcess.AsConsoleText(src);
-                var combined = 0;
-                var total = RobocopySummary.Empty;
-
-                for (var i = 0; i < tasks.Count; i++)
-                    parts.Add((tasks[i].Label, "", Path.Combine(logDir, $"{stamp}-{i:0000}.part")));
-
-                var options = new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, runJob.Options.Processes), CancellationToken = ct };
-                await Parallel.ForEachAsync(Enumerable.Range(0, tasks.Count), options, async (i, token) =>
-                {
-                    var t = tasks[i];
-                    var args = RobocopyArgs.Build(runJob, t.Source, t.Destination, t.Pass, false, parts[i].File, true, t.RootExcludedDirs);
-                    lock (parts) parts[i] = parts[i] with { Command = "robocopy " + CommandLine.Join(args) };
-
-                    var counter = new ProgressCounter(consoleSource);
-                    lock (rj.Counters) rj.Counters.Add(counter);
-                    var summary = new SummaryCollector();
-                    var code = await RobocopyProcess.RunAsync(args, line =>
-                    {
-                        counter.Add(line);
-                        summary.Add(line);
-                    }, token);
-
-                    lock (parts)
-                    {
-                        combined |= code;
-                        if (summary.Summary is { } s) total = total.Add(s);
-                    }
-                });
-
-                record.ExitCode = combined;
-                record.Outcome = RobocopyExitCode.Outcome(combined);
-                record.FilesCopied = total.Files.Copied;
-                record.BytesCopied = total.Bytes.Copied;
-                record.FilesSkipped = total.Files.Skipped;
-                record.FilesFailed = total.Files.Failed;
-                record.FilesExtra = total.Files.Extras;
-                record.DirsExtra = total.Dirs.Extras;
-                if (tasks.Count > 1) notes.Add(Loc.Fl(lang, "run.parallel", tasks.Count));
-
-                if (job.Options.KeepVersions)
-                {
-                    versions.FoldersRemoved = RemoveExpiredVersions(dst, job.Options.VersionRetentionDays);
-                    if (versions.FoldersRemoved > 0) notes.Add(Loc.Fl(lang, "run.versions.removed", versions.FoldersRemoved, job.Options.VersionRetentionDays));
-                }
-
-                if (job.Options.Compress)
-                {
-                    var c = NtfsCompression.CompressTree(dst, ct);
-                    notes.Add(Loc.Fl(lang, "run.ntfs", Fmt.Count(c.Files, Loc.CultureOf(lang)), Fmt.Bytes(c.Saved, Loc.CultureOf(lang))));
-                    foreach (var error in c.Errors) versions.Errors.Add(new CopyError(error, 0, "Compressing", ""));
-                }
-            }
+            if (failed > 0) record.Outcome = Worse(record.Outcome, failed == job.Sources.Count ? RunOutcome.Failed : RunOutcome.Warning);
 
             // Without the snapshot open files may be missing, and a file that could not be
             // archived may have been overwritten: never report a clean success then.
@@ -236,7 +151,8 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
         }
         finally
         {
-            if (snapshot != null)
+            foreach (var run in runs) run.DeleteLists();
+            foreach (var snapshot in snapshots.Values)
             {
                 try
                 {
@@ -252,7 +168,8 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
             record.EndUtc = DateTime.UtcNow;
             if (record.Outcome == RunOutcome.Running) record.Outcome = RunOutcome.Failed;
 
-            var found = new LogFindings(dst, engineResult == null && job.Mode == CopyMode.Mirror && !job.Options.KeepVersions);
+            // The copy engine lists what it deleted itself; robocopy's deletions come from its log.
+            var found = new LogFindings(dst, job.Mode == CopyMode.Mirror && !job.Options.KeepVersions);
             try
             {
                 MergeLogs(Path.Combine(logDir, record.LogFile), job, record, parts, found);
@@ -264,13 +181,13 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
 
             try
             {
-                var engineErrors = engineResult?.Errors ?? [];
+                var engineErrors = engineResults.SelectMany(r => r.Errors).ToList();
                 var errors = versions.Errors.Concat(engineErrors).Concat(found.Errors.Errors).ToList();
                 record.Errors = versions.Errors.Count + engineErrors.Count + found.Errors.Count;
                 record.ReportFile = reports.WriteRun(job.Id, stamp, new RunReport
                 {
                     JobName = job.Name,
-                    Source = job.Source.Path,
+                    Source = string.Join(Environment.NewLine, job.Sources.Select(s => s.Path)),
                     Destination = job.Destination.Path,
                     Mode = job.Mode,
                     Record = record,
@@ -279,12 +196,12 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
                     ErrorCount = (int)record.Errors,
                     KeepVersions = job.Options.KeepVersions,
                     RetentionDays = job.Options.VersionRetentionDays,
-                    VersionsFolder = engineResult?.VersionsFolder is { } vf ? PathUtil.Combine(dst, vf) : versions.Folder ?? Versions.Root(dst),
-                    Archived = engineResult?.Archived ?? versions.Moved,
-                    ArchivedCount = engineResult?.ArchivedCount ?? versions.Count,
+                    VersionsFolder = job.MultiSource ? PathUtil.Combine(dst, "*\\" + Versions.FolderName) : versions.Folder ?? Versions.Root(dst),
+                    Archived = versions.Moved.Concat(engineResults.SelectMany(r => r.Archived)).Take(RunReport.MaxListedItems).ToList(),
+                    ArchivedCount = versions.Count + engineResults.Sum(r => r.ArchivedCount),
                     VersionFoldersRemoved = versions.FoldersRemoved,
-                    Deleted = engineResult?.Deleted ?? found.Deleted,
-                    DeletedCount = engineResult?.DeletedCount ?? found.DeletedCount,
+                    Deleted = found.Deleted.Concat(engineResults.SelectMany(r => r.Deleted)).Take(RunReport.MaxListedItems).ToList(),
+                    DeletedCount = found.DeletedCount + engineResults.Sum(r => r.DeletedCount),
                     LogFile = record.LogFile,
                 }, lang);
             }
@@ -299,6 +216,271 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
             _tasks.TryRemove(job.Id, out _);
             rj.Cancel.Dispose();
             log.LogInformation("Job {Name} finished: {Outcome}, exit code {Code}", job.Name, record.Outcome, record.ExitCode);
+        }
+    }
+
+    /// <summary>The worse of two outcomes; Running stands for "nothing yet".</summary>
+    private static RunOutcome Worse(RunOutcome a, RunOutcome b) =>
+        a == RunOutcome.Running ? b : b == RunOutcome.Running ? a : (RunOutcome)Math.Max((int)a, (int)b);
+
+    /// <summary>One robocopy copy of a source: the source itself, or a DFS link below it (<see cref="Prefix"/>).</summary>
+    private sealed record Segment(CopyJob Job, string Src, string Dst, string Prefix)
+    {
+        public string? ListFile { get; set; }
+    }
+
+    /// <summary>One source of a run, ready to copy: robocopy segments with their lists, or an engine plan.</summary>
+    private sealed class SourceRun
+    {
+        public required CopyJob Part { get; init; }
+        public required int Index { get; init; }
+        public required string Label { get; init; }
+        /// <summary>The part reading from the shadow copy, when there is one, and auto-tuned.</summary>
+        public required CopyJob RunJob { get; set; }
+        public required string Src { get; set; }
+        public required string Dst { get; init; }
+        public List<Segment> Segments { get; } = [];
+        public SyncPlan? Plan { get; set; }
+        public Func<ISourceStore>? OpenSource { get; set; }
+        public Func<ITargetStore>? OpenTarget { get; set; }
+        public int Threads { get; set; }
+        public long TotalFiles { get; set; }
+        public long TotalBytes { get; set; }
+
+        public void DeleteLists()
+        {
+            foreach (var s in Segments)
+            {
+                if (s.ListFile == null) continue;
+                try { File.Delete(s.ListFile); } catch (IOException) { }
+                s.ListFile = null;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Checks a source, takes its shadow copy (one per volume and run), finds the DFS links below it and
+    /// scans what there is to copy.
+    /// </summary>
+    private async Task<SourceRun> PrepareAsync(CopyJob part, int index, string label, RunningJob rj, Dictionary<string, ShadowCopy> snapshots,
+        List<NetworkShare.Lease> leases, List<string> notes, string? lang, CancellationToken ct)
+    {
+        var src = PathUtil.NormalizeDir(part.Source.Path);
+        var dst = PathUtil.NormalizeDir(part.Destination.Path);
+        if (!part.Source.IsSftp && !Directory.Exists(src)) throw new ServiceException(Loc.Fl(lang, "err.nosource", src));
+        // Through DFS two different names can be the same folder: never copy a source into itself.
+        if ((part.Source.IsNetwork || part.Destination.IsNetwork) && PathUtil.Overlaps(DfsClient.Resolve(src), DfsClient.Resolve(dst)))
+            throw new ServiceException(Loc.Fl(lang, "err.overlap.dfs", src, dst));
+
+        var links = new List<LinkedFolder>();
+        if (part.Source.IsNetwork)
+        {
+            try
+            {
+                var scan = await Task.Run(() => DfsClient.FindLinks(src, new Exclusions(part), part.Options.FollowsJunctionsOn(part.Source), ct), ct);
+                links = scan.Links;
+                notes.AddRange(DescribeLinks(scan, lang).Select(n => label + n));
+                log.LogInformation("Source {Source}: {Count} links followed, {Loops} loops left out", src, links.Count, scan.Loops.Count);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+            {
+                notes.Add(label + Loc.Fl(lang, "run.links.failed", e.Message));
+            }
+            leases.AddRange(ConnectDfsTargets(part, null, src, links, lang));
+        }
+
+        // From here on runJob reads the source from the snapshot, when there is one.
+        var runJob = part;
+        if (part.Options.UseShadowCopy && !part.Source.IsRemote)
+        {
+            try
+            {
+                var volume = ShadowCopy.VolumeOf(src);
+                if (!snapshots.TryGetValue(volume, out var snapshot))
+                {
+                    snapshot = await ShadowCopy.CreateAsync(src, $"{rj.Record.Id:N}-{snapshots.Count}", ct);
+                    snapshots[volume] = snapshot;
+                    log.LogInformation("Job {Name}: shadow copy {Id} of {Volume}", part.Name, snapshot.ShadowId, snapshot.VolumeRoot);
+                }
+                runJob = SnapshotPaths.ForSnapshot(part, snapshot.VolumeRoot, snapshot.LinkPath);
+                notes.Add(label + Loc.Fl(lang, "run.vss", snapshot.VolumeRoot, runJob.Source.Path));
+            }
+            catch (Exception e) when (e is ShadowCopyException or ManagementException or Win32Exception or UnauthorizedAccessException or IOException)
+            {
+                // Copy anyway: everything but the open files still gets copied.
+                rj.ShadowCopyFailed = true;
+                notes.Add(label + Loc.Fl(lang, "run.vss.failed", e.Message));
+                log.LogWarning(e, "Job {Name}: shadow copy failed, copying without it", part.Name);
+            }
+        }
+        var run = new SourceRun { Part = part, Index = index, Label = label, RunJob = runJob, Src = PathUtil.NormalizeDir(runJob.Source.Path), Dst = dst };
+
+        if (UsesEngine(part, dst, lang, out var engineNote))
+        {
+            notes.Add(label + engineNote);
+            run.OpenSource = SourceOpener(runJob, null, run.Src, lang, links);
+            run.OpenTarget = TargetOpener(part, null, dst, lang);
+            var threads = part.Options.Threads;
+            if (part.Options.AutoTune) threads = AutoTune.Compute(await ResourceProbe.MeasureAsync(ct), true, 1).Threads;
+            // Each worker holds its own connection: servers limit sessions, and disks seek.
+            run.Threads = Math.Clamp(threads, 1, part.Source.IsSftp || part.Destination.IsSftp ? 8 : 16);
+            run.Plan = await Task.Run(() => PlanEngine(part, run.OpenSource, run.OpenTarget, lang, ct), ct);
+            run.TotalFiles = run.Plan.Copies.Count;
+            run.TotalBytes = run.Plan.Copies.Sum(c => c.Source.Size);
+            return run;
+        }
+
+        if (part.Options.AutoTune)
+        {
+            var names = TopLevelFolders(run.Src, part.Options.SkipJunctions);
+            var tune = AutoTune.Compute(await ResourceProbe.MeasureAsync(ct), IsNetwork(part), names.Count + links.Count);
+            run.RunJob = runJob = Json.Clone(runJob);
+            runJob.Options.Processes = tune.Processes;
+            runJob.Options.Threads = tune.Threads;
+            notes.Add(label + DescribeTune(tune, lang));
+            log.LogInformation("Job {Name}: auto-tuned to {Processes} processes x {Threads} threads", part.Name, tune.Processes, tune.Threads);
+        }
+
+        if (links.Count == 0)
+        {
+            run.Segments.Add(new Segment(runJob, run.Src, dst, ""));
+        }
+        else
+        {
+            run.Segments.Add(new Segment(LinkedFolders.WithoutLinks(runJob, links), run.Src, dst, ""));
+            foreach (var l in links)
+            {
+                var j = LinkedFolders.ForLink(runJob, l, links);
+                run.Segments.Add(new Segment(j, l.Path, PathUtil.NormalizeDir(j.Destination.Path), l.Relative));
+            }
+        }
+
+        // One robocopy /L pass per segment gives the totals for the progress bar and what versions must keep.
+        foreach (var s in run.Segments)
+        {
+            s.ListFile = await ListAsync(s.Job, s.Src, s.Dst, ct);
+            var totals = new PreviewAggregator(s.Src, s.Dst, part.Mode);
+            foreach (var line in File.Exists(s.ListFile) ? File.ReadLines(s.ListFile) : []) totals.Add(line);
+            run.TotalFiles += totals.Result.FilesToCopy;
+            run.TotalBytes += totals.Result.BytesToCopy;
+        }
+        return run;
+    }
+
+    private static IEnumerable<string> DescribeLinks(LinkScan scan, string? lang)
+    {
+        static string Names(IEnumerable<string> names) => string.Join(", ", names.Take(10)) + (names.Count() > 10 ? ", …" : "");
+        var dfs = scan.Links.Where(l => l.Kind == LinkKind.Dfs).Select(l => l.Relative).ToList();
+        var junctions = scan.Links.Where(l => l.Kind == LinkKind.Junction).Select(l => l.Relative).ToList();
+        if (dfs.Count > 0) yield return Loc.Fl(lang, "run.dfs", dfs.Count, Names(dfs));
+        if (junctions.Count > 0) yield return Loc.Fl(lang, "run.junctions", junctions.Count, Names(junctions));
+        if (scan.Loops.Count > 0) yield return Loc.Fl(lang, "run.junctions.loop", scan.Loops.Count, Names(scan.Loops));
+        if (scan.Truncated) yield return Loc.Fl(lang, "run.links.truncated", Fmt.Count(LinkedFolders.MaxFolders, Loc.CultureOf(lang)));
+    }
+
+    /// <summary>
+    /// A share reached through DFS may sit on another server, which wants the same account: the
+    /// targets of the source and of its links are connected with the source's credentials.
+    /// A target that refuses is left to the DFS client.
+    /// </summary>
+    private List<NetworkShare.Lease> ConnectDfsTargets(CopyJob part, JobEndpoint? stored, string src, IReadOnlyList<LinkedFolder> links, string? lang)
+    {
+        var leases = new List<NetworkShare.Lease>();
+        if (!part.Source.HasCredential) return leases;
+        var password = PasswordFor(part.Source, stored, lang);
+        foreach (var path in links.Where(l => l.Kind == LinkKind.Dfs).Select(l => l.Path).Prepend(src))
+        {
+            var target = DfsClient.Resolve(path);
+            if (string.Equals(target, path, StringComparison.OrdinalIgnoreCase) || PathUtil.ShareRoot(target) is not { } share) continue;
+            try
+            {
+                leases.Add(NetworkShare.Connect(share, part.Source.Credential!.UserName, password));
+            }
+            catch (NetworkShareException e)
+            {
+                log.LogInformation("DFS target {Share} of {Path} not connected: {Message}", share, path, e.Message);
+            }
+        }
+        return leases;
+    }
+
+    private async Task RunRobocopyAsync(SourceRun run, RunningJob rj, DateTime startLocal, string logDir, string stamp,
+        List<(string Label, string Command, string File)> parts, List<string> notes, ArchiveResult versions, string? lang, CancellationToken ct)
+    {
+        var record = rj.Record;
+        var part = run.Part;
+        var culture = Loc.CultureOf(lang);
+
+        if (part.Options.KeepVersions && Directory.Exists(run.Dst))
+        {
+            var before = versions.Count;
+            foreach (var s in run.Segments)
+                ArchiveVersions(s, run.Dst, versions, startLocal, ct);
+            var count = versions.Count - before;
+            record.VersionsArchived += count;
+            if (count > 0) notes.Add(run.Label + Loc.Fl(lang, "run.versions", Fmt.Count(count, culture), Versions.RunFolder(run.Dst, startLocal)));
+        }
+        run.DeleteLists();
+
+        var tasks = new List<(RobocopyTask Task, CopyJob Job, string ConsoleSource)>();
+        foreach (var s in run.Segments)
+        {
+            var names = s.Job.Options.Processes > 1 ? TopLevelFolders(s.Src, s.Job.Options.SkipJunctions) : [];
+            var consoleSource = RobocopyProcess.AsConsoleText(s.Src);
+            tasks.AddRange(ParallelPlan.Build(s.Job, names).Select(t => (t, s.Job, consoleSource)));
+        }
+
+        var first = parts.Count;
+        for (var i = 0; i < tasks.Count; i++)
+            parts.Add((run.Label + tasks[i].Task.Label, "", Path.Combine(logDir, $"{stamp}-{run.Index:00}-{i:0000}.part")));
+
+        var combined = 0;
+        var total = RobocopySummary.Empty;
+        var options = new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, run.RunJob.Options.Processes), CancellationToken = ct };
+        await Parallel.ForEachAsync(Enumerable.Range(0, tasks.Count), options, async (i, token) =>
+        {
+            var (t, job, consoleSource) = tasks[i];
+            var args = RobocopyArgs.Build(job, t.Source, t.Destination, t.Pass, false, parts[first + i].File, true, t.RootExcludedDirs);
+            lock (parts) parts[first + i] = parts[first + i] with { Command = "robocopy " + CommandLine.Join(args) };
+
+            var counter = new ProgressCounter(consoleSource);
+            lock (rj.Counters) rj.Counters.Add(counter);
+            var summary = new SummaryCollector();
+            var code = await RobocopyProcess.RunAsync(args, line =>
+            {
+                counter.Add(line);
+                summary.Add(line);
+            }, token);
+
+            lock (parts)
+            {
+                combined |= code;
+                if (summary.Summary is { } s) total = total.Add(s);
+            }
+        });
+
+        record.ExitCode |= combined;
+        record.Outcome = Worse(record.Outcome, RobocopyExitCode.Outcome(combined));
+        record.FilesCopied += total.Files.Copied;
+        record.BytesCopied += total.Bytes.Copied;
+        record.FilesSkipped += total.Files.Skipped;
+        record.FilesFailed += total.Files.Failed;
+        record.FilesExtra += total.Files.Extras;
+        record.DirsExtra += total.Dirs.Extras;
+        if (tasks.Count > 1) notes.Add(run.Label + Loc.Fl(lang, "run.parallel", tasks.Count));
+
+        if (part.Options.KeepVersions)
+        {
+            var removed = RemoveExpiredVersions(run.Dst, part.Options.VersionRetentionDays);
+            versions.FoldersRemoved += removed;
+            if (removed > 0) notes.Add(run.Label + Loc.Fl(lang, "run.versions.removed", removed, part.Options.VersionRetentionDays));
+        }
+
+        if (part.Options.Compress)
+        {
+            var c = NtfsCompression.CompressTree(run.Dst, ct);
+            notes.Add(run.Label + Loc.Fl(lang, "run.ntfs", Fmt.Count(c.Files, culture), Fmt.Bytes(c.Saved, culture)));
+            foreach (var error in c.Errors) versions.Errors.Add(new CopyError(error, 0, "Compressing", ""));
         }
     }
 
@@ -319,8 +501,15 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
         return true;
     }
 
-    private static Func<ISourceStore> SourceOpener(CopyJob job, CopyJob? stored, string src, string? lang) =>
-        job.Source.IsSftp ? () => Sftp.Open(job.Source, stored?.Source, lang) : () => new LocalSource(src);
+    /// <param name="links">Links below a share source (DFS links, junctions), each read through its own path.</param>
+    private static Func<ISourceStore> SourceOpener(CopyJob job, CopyJob? stored, string src, string? lang, IReadOnlyList<LinkedFolder>? links = null)
+    {
+        // Like robocopy without /XJ, the engine then goes through junctions and symbolic links.
+        var follow = !job.Options.SkipJunctions;
+        return job.Source.IsSftp ? () => Sftp.Open(job.Source, stored?.Source, lang)
+            : links is { Count: > 0 } ? () => new MountedSource(new LocalSource(src, follow), links.ToDictionary(l => l.Relative, l => (ISourceStore)new LocalSource(l.Path, follow)))
+            : () => new LocalSource(src, follow);
+    }
 
     private static Func<ITargetStore> TargetOpener(CopyJob job, CopyJob? stored, string dst, string? lang) =>
         job.Destination.IsSftp ? () => Sftp.Open(job.Destination, stored?.Destination, lang) : () => new LocalTarget(dst);
@@ -340,68 +529,53 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
         return SyncPlan.Build(sourceItems, exists ? SyncEngine.Scan(t, exclusions, true, ct) : null, job.Options.Compress);
     }
 
-    private async Task<SyncResult> RunEngineAsync(CopyJob job, CopyJob runJob, RunningJob rj, string src, string dst, DateTime startLocal,
-        string partFile, List<(string Label, string Command, string File)> parts, List<string> notes, string? lang, CancellationToken ct)
+    private async Task<SyncResult> RunEngineAsync(SourceRun run, RunningJob rj, DateTime startLocal, string partFile,
+        List<(string Label, string Command, string File)> parts, List<string> notes, string? lang, CancellationToken ct)
     {
         var record = rj.Record;
-        var openSource = SourceOpener(runJob, null, src, lang);
-        var openTarget = TargetOpener(job, null, dst, lang);
-
-        var threads = job.Options.Threads;
-        if (job.Options.AutoTune)
-        {
-            var tune = AutoTune.Compute(await ResourceProbe.MeasureAsync(ct), true, 1);
-            threads = tune.Threads;
-        }
-        // Each worker holds its own connection: servers limit sessions, and disks seek.
-        threads = Math.Clamp(threads, 1, job.Source.IsSftp || job.Destination.IsSftp ? 8 : 16);
-
-        var plan = await Task.Run(() => PlanEngine(job, openSource, openTarget, lang, ct), ct);
-        rj.TotalFiles = plan.Copies.Count;
-        rj.TotalBytes = plan.Copies.Sum(c => c.Source.Size);
-        rj.Scanning = false;
-
-        var counter = new ProgressCounter(src);
+        var job = run.Part;
+        var culture = Loc.CultureOf(lang);
+        var counter = new ProgressCounter(run.Src);
         lock (rj.Counters) rj.Counters.Add(counter);
-        parts.Add(("engine", Loc.Fl(lang, "run.engine.cmd", threads, job.Options.Compress ? Compression.Suffix : "-"), partFile));
+        parts.Add((run.Label + "engine", Loc.Fl(lang, "run.engine.cmd", run.Threads, job.Options.Compress ? Compression.Suffix : "-"), partFile));
         await using var writer = new StreamWriter(partFile, false, new UTF8Encoding(true));
         void Log(string line)
         {
             lock (writer) writer.WriteLine(line);
         }
 
-        var result = await SyncEngine.RunAsync(plan, openSource, openTarget, new SyncSettings
+        var result = await SyncEngine.RunAsync(run.Plan!, run.OpenSource!, run.OpenTarget!, new SyncSettings
         {
             Mode = job.Mode,
             Compress = job.Options.Compress,
             KeepVersions = job.Options.KeepVersions,
             StartLocal = startLocal,
-            Threads = threads,
+            Threads = run.Threads,
             Retries = job.Options.Retries,
             RetryWaitSeconds = job.Options.RetryWaitSeconds,
         }, counter, Log, ct);
 
         if (job.Options.KeepVersions)
         {
-            using var t = openTarget();
+            using var t = run.OpenTarget!();
             var removed = SyncEngine.RemoveExpiredVersions(t, job.Options.VersionRetentionDays, Log);
-            if (removed > 0) notes.Add(Loc.Fl(lang, "run.versions.removed", removed, job.Options.VersionRetentionDays));
+            if (removed > 0) notes.Add(run.Label + Loc.Fl(lang, "run.versions.removed", removed, job.Options.VersionRetentionDays));
         }
-        if (result.ArchivedCount > 0) notes.Add(Loc.Fl(lang, "run.versions", Fmt.Count(result.ArchivedCount, Loc.CultureOf(lang)), PathUtil.Combine(dst, result.VersionsFolder!)));
-        if (result.FilesCompressed > 0) notes.Add(Loc.Fl(lang, "run.gz", Fmt.Count(result.FilesCompressed, Loc.CultureOf(lang))));
+        if (result.ArchivedCount > 0) notes.Add(run.Label + Loc.Fl(lang, "run.versions", Fmt.Count(result.ArchivedCount, culture), PathUtil.Combine(run.Dst, result.VersionsFolder!)));
+        if (result.FilesCompressed > 0) notes.Add(run.Label + Loc.Fl(lang, "run.gz", Fmt.Count(result.FilesCompressed, culture)));
 
-        record.FilesCopied = result.FilesCopied;
-        record.BytesCopied = result.BytesCopied;
-        record.FilesSkipped = result.FilesSkipped;
-        record.FilesFailed = result.FilesFailed;
-        record.FilesExtra = result.FilesExtra;
-        record.DirsExtra = result.DirsExtra;
-        record.VersionsArchived = result.ArchivedCount;
+        record.FilesCopied += result.FilesCopied;
+        record.BytesCopied += result.BytesCopied;
+        record.FilesSkipped += result.FilesSkipped;
+        record.FilesFailed += result.FilesFailed;
+        record.FilesExtra += result.FilesExtra;
+        record.DirsExtra += result.DirsExtra;
+        record.VersionsArchived += result.ArchivedCount;
         // Robocopy-like exit code, so history and reports read the same: 1 copied, 2 extras, 8 failures.
-        record.ExitCode = (result.FilesCopied > 0 ? 1 : 0) | (result.FilesExtra + result.DirsExtra > 0 ? 2 : 0) | (result.FilesFailed > 0 || result.Errors.Count > 0 ? 8 : 0);
-        record.Outcome = result.FilesFailed > 0 && result.FilesCopied == 0 && plan.Copies.Count > 0 ? RunOutcome.Failed
+        record.ExitCode |= (result.FilesCopied > 0 ? 1 : 0) | (result.FilesExtra + result.DirsExtra > 0 ? 2 : 0) | (result.FilesFailed > 0 || result.Errors.Count > 0 ? 8 : 0);
+        record.Outcome = Worse(record.Outcome, result.FilesFailed > 0 && result.FilesCopied == 0 && run.Plan!.Copies.Count > 0 ? RunOutcome.Failed
             : result.FilesFailed > 0 || result.Errors.Count > 0 ? RunOutcome.Warning
-            : RunOutcome.Success;
+            : RunOutcome.Success);
         return result;
     }
 
@@ -426,15 +600,16 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
     /// <summary>
     /// Moves what the copy is about to overwrite or (mirror) delete in the destination into
     /// this run's versions folder. The robocopy /L list tells what that is; nothing in the source moves.
+    /// A DFS link keeps its versions in the source's versions folder, under its relative path.
     /// </summary>
-    private static ArchiveResult ArchiveVersions(CopyJob runJob, string listFile, string src, string dst, DateTime startLocal, CancellationToken ct)
+    private static void ArchiveVersions(Segment s, string versionsRoot, ArchiveResult result, DateTime startLocal, CancellationToken ct)
     {
-        var result = new ArchiveResult { Folder = Versions.RunFolder(dst, startLocal) };
-        if (!File.Exists(listFile)) return result;
-        foreach (var m in Versions.Plan(File.ReadLines(listFile), src, dst, runJob.Mode))
+        result.Folder = Versions.RunFolder(versionsRoot, startLocal);
+        if (s.ListFile == null || !File.Exists(s.ListFile)) return;
+        foreach (var m in Versions.Plan(File.ReadLines(s.ListFile), s.Src, s.Dst, s.Job.Mode))
         {
             ct.ThrowIfCancellationRequested();
-            var target = PathUtil.Combine(result.Folder, m.RelativePath);
+            var target = PathUtil.Combine(result.Folder, s.Prefix.Length == 0 ? m.RelativePath : s.Prefix + "\\" + m.RelativePath);
             try
             {
                 if (m.IsDirectory ? !Directory.Exists(m.DestinationPath) : !File.Exists(m.DestinationPath)) continue; // a new file
@@ -450,7 +625,6 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
                     result.Errors.Add(new CopyError(m.DestinationPath, e.HResult & 0xFFFF, "→ " + Versions.FolderName, e.Message));
             }
         }
-        return result;
     }
 
     /// <summary>Deletes version folders older than the retention; returns how many.</summary>
@@ -485,36 +659,73 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
         Loc.Fl(lang, "run.auto", t.Processes, t.Threads, t.Resources.LogicalCores, (int)Math.Round(t.Resources.CpuLoad * 100), Fmt.Bytes(t.Resources.AvailableRamBytes, Loc.CultureOf(lang)));
 
     /// <summary>
-    /// Runs robocopy /L over the whole tree and reports what a real run would copy and delete.
+    /// Runs robocopy /L over the whole tree (every source, every DFS link) and reports what a real
+    /// run would copy and delete.
     /// </summary>
     public async Task<PreviewResult> PreviewAsync(CopyJob job, CopyJob? stored, string? lang, CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
+        PreviewResult? total = null;
+        var leases = new List<NetworkShare.Lease>();
+        try
+        {
+            leases.AddRange(Connect(job, stored, lang));
+            for (var i = 0; i < job.Sources.Count; i++)
+            {
+                var part = job.ForSource(i);
+                var storedPart = stored == null ? null : new CopyJob { Source = StoredSource(stored, job.Sources[i], i) ?? new JobEndpoint(), Destination = stored.Destination };
+                var r = await PreviewSourceAsync(part, storedPart, leases, lang, ct);
+                if (job.MultiSource && r.Error != null) r.Error = $"[{part.Source.Folder}] {r.Error}";
+                if (total == null) total = r;
+                else total.Merge(r);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception e)
+        {
+            total ??= new PreviewResult { Mode = job.Mode, Source = job.Source.Path };
+            total.Error = e.Message;
+        }
+        finally
+        {
+            foreach (var l in leases) l.Dispose();
+        }
+        total!.Destination = PathUtil.NormalizeDir(job.Destination.Path);
+        total.Elapsed = sw.Elapsed;
+        return total;
+    }
+
+    private async Task<PreviewResult> PreviewSourceAsync(CopyJob job, CopyJob? stored, List<NetworkShare.Lease> leases, string? lang, CancellationToken ct)
+    {
         var src = PathUtil.NormalizeDir(job.Source.Path);
         var dst = PathUtil.NormalizeDir(job.Destination.Path);
         var agg = new PreviewAggregator(src, dst, job.Mode);
         var result = agg.Result;
-        var leases = new List<NetworkShare.Lease>();
-        var logFile = Path.Combine(AppPaths.TempDir, $"preview-{Guid.NewGuid():N}.log");
         try
         {
-            leases.AddRange(Connect(job, stored, lang));
+            if (!job.Source.IsSftp && !Directory.Exists(src))
+            {
+                result.Error = Loc.Fl(lang, "err.nosource", src);
+                return result;
+            }
+            var links = job.Source.IsNetwork
+                ? (await Task.Run(() => DfsClient.FindLinks(src, new Exclusions(job), job.Options.FollowsJunctionsOn(job.Source), ct), ct)).Links
+                : [];
+            leases.AddRange(ConnectDfsTargets(job, stored?.Source, src, links, lang));
+
             if (UsesEngine(job, dst, lang, out var engineNote))
             {
-                var openSource = SourceOpener(job, stored, src, lang);
+                var openSource = SourceOpener(job, stored, src, lang, links);
                 var openTarget = TargetOpener(job, stored, dst, lang);
                 var plan = await Task.Run(() => PlanEngine(job, openSource, openTarget, lang, ct), ct);
                 using var s = openSource();
                 using var t = openTarget();
                 var preview = SyncPreview.From(plan, s, t, job);
                 preview.CommandLine = engineNote;
-                preview.Elapsed = sw.Elapsed;
                 return preview;
-            }
-            if (!Directory.Exists(src))
-            {
-                result.Error = Loc.Fl(lang, "err.nosource", src);
-                return result;
             }
             result.DestinationExists = Directory.Exists(dst);
             result.KeepVersions = job.Options.KeepVersions;
@@ -526,17 +737,40 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
                 job.Options.Processes = 1;
                 job.Options.Threads = tune.Threads;
             }
-            var args = RobocopyArgs.Build(job, src, dst, RobocopyPass.Full, true, logFile, false);
-            var code = await RobocopyProcess.RunAsync(args, null, ct);
-            if (File.Exists(logFile))
+            List<(CopyJob, string, string)> segments = links.Count == 0
+                ? [(job, src, dst)]
+                : links.Select(l => LinkedFolders.ForLink(job, l, links)).Select(j => (j, PathUtil.NormalizeDir(j.Source.Path), PathUtil.NormalizeDir(j.Destination.Path)))
+                    .Prepend((LinkedFolders.WithoutLinks(job, links), src, dst)).ToList();
+            var commands = new List<string>();
+            foreach (var (segJob, segSrc, segDst) in segments)
             {
-                foreach (var line in File.ReadLines(logFile)) agg.Add(line);
+                // Each segment is read with its own roots, then counted into this source's preview.
+                var segAgg = segSrc == src ? agg : new PreviewAggregator(segSrc, segDst, job.Mode);
+                var logFile = Path.Combine(AppPaths.TempDir, $"preview-{Guid.NewGuid():N}.log");
+                try
+                {
+                    var code = await RobocopyProcess.RunAsync(RobocopyArgs.Build(segJob, segSrc, segDst, RobocopyPass.Full, true, logFile, false), null, ct);
+                    if (File.Exists(logFile))
+                    {
+                        foreach (var line in File.ReadLines(logFile)) segAgg.Add(line);
+                    }
+                    segAgg.Complete(code);
+                }
+                finally
+                {
+                    try { File.Delete(logFile); } catch (IOException) { }
+                }
+                if (segAgg != agg)
+                {
+                    var r = segAgg.Result;
+                    r.Source = src;
+                    r.DestinationExists = result.DestinationExists;
+                    result.Merge(r);
+                }
+                commands.Add("robocopy " + CommandLine.Join(RobocopyArgs.Build(segJob, segSrc, segDst, RobocopyPass.Full, false, null, false)));
             }
-            agg.Complete(code);
             if (job.Mode == CopyMode.Mirror) CountExtraFolders(result, ct);
-
-            var real = RobocopyArgs.Build(job, src, dst, RobocopyPass.Full, false, null, false);
-            result.CommandLine = "robocopy " + CommandLine.Join(real);
+            result.CommandLine = string.Join(Environment.NewLine, commands);
         }
         catch (OperationCanceledException)
         {
@@ -545,12 +779,6 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
         catch (Exception e)
         {
             result.Error = e.Message;
-        }
-        finally
-        {
-            foreach (var l in leases) l.Dispose();
-            try { File.Delete(logFile); } catch (IOException) { }
-            result.Elapsed = sw.Elapsed;
         }
         return result;
     }
@@ -602,7 +830,7 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
         NetworkShare.Lease? lease = null;
         try
         {
-            var storedEndpoint = req.IsDestination ? stored?.Destination : stored?.Source;
+            var storedEndpoint = req.IsDestination ? stored?.Destination : StoredSource(stored, req.Endpoint, -1);
             if (req.Endpoint.IsNetwork && req.Endpoint.HasCredential)
                 lease = NetworkShare.Connect(root, req.Endpoint.Credential!.UserName, PasswordFor(req.Endpoint, storedEndpoint, lang));
 
@@ -648,7 +876,7 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
     {
         try
         {
-            var storedEndpoint = req.IsDestination ? stored?.Destination : stored?.Source;
+            var storedEndpoint = req.IsDestination ? stored?.Destination : StoredSource(stored, req.Endpoint, -1);
             var client = Sftp.Connect(req.Endpoint, storedEndpoint, NullIfEmpty(req.Endpoint.HostKey), lang, out var hostKey);
             using var store = new SftpStore(client, SftpLocation.TryParse(req.Endpoint.Path)!);
             if (store.Exists())
@@ -679,7 +907,7 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
     {
         try
         {
-            var storedEndpoint = req.IsDestination ? stored?.Destination : stored?.Source;
+            var storedEndpoint = req.IsDestination ? stored?.Destination : StoredSource(stored, req.Endpoint, -1);
             var client = Sftp.Connect(req.Endpoint, storedEndpoint, NullIfEmpty(req.Endpoint.HostKey), lang, out _);
             using var store = new SftpStore(client, SftpLocation.TryParse(req.Endpoint.Path)!);
             var rel = req.Relative.Replace('\\', '/').Trim('/');
@@ -713,7 +941,7 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
         NetworkShare.Lease? lease = null;
         try
         {
-            var storedEndpoint = req.IsDestination ? stored?.Destination : stored?.Source;
+            var storedEndpoint = req.IsDestination ? stored?.Destination : StoredSource(stored, req.Endpoint, -1);
             if (req.Endpoint.IsNetwork && req.Endpoint.HasCredential)
                 lease = NetworkShare.Connect(path, req.Endpoint.Credential!.UserName, PasswordFor(req.Endpoint, storedEndpoint, lang));
 
@@ -755,12 +983,13 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
     /// Connects the network endpoints that have credentials. <paramref name="stored"/> is the
     /// saved version of a job being edited, whose passwords fill those not retyped.
     /// </summary>
-    private static List<NetworkShare.Lease> Connect(CopyJob job, CopyJob? stored, string? lang)
+    internal static List<NetworkShare.Lease> Connect(CopyJob job, CopyJob? stored, string? lang)
     {
         var leases = new List<NetworkShare.Lease>();
         try
         {
-            foreach (var (e, s) in new[] { (job.Source, stored?.Source), (job.Destination, stored?.Destination) })
+            var endpoints = job.Sources.Select((e, i) => (e, StoredSource(stored, e, i))).Append((job.Destination, stored?.Destination));
+            foreach (var (e, s) in endpoints)
             {
                 if (e.IsNetwork && e.HasCredential)
                     leases.Add(NetworkShare.Connect(e.Path, e.Credential!.UserName, PasswordFor(e, s, lang)));
@@ -772,6 +1001,19 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
             foreach (var l in leases) l.Dispose();
             throw;
         }
+    }
+
+    /// <summary>
+    /// The saved version of a source being edited, whose secrets fill those not retyped: the one with
+    /// the same path, else the one at the same place, else one with the same user.
+    /// </summary>
+    internal static JobEndpoint? StoredSource(CopyJob? stored, JobEndpoint e, int index)
+    {
+        if (stored == null) return null;
+        var sources = stored.Sources;
+        return sources.FirstOrDefault(s => string.Equals(PathUtil.NormalizeDir(s.Path), PathUtil.NormalizeDir(e.Path), StringComparison.OrdinalIgnoreCase))
+            ?? (index >= 0 && index < sources.Count ? sources[index] : null)
+            ?? sources.FirstOrDefault(s => e.Credential != null && string.Equals(s.Credential?.UserName, e.Credential.UserName, StringComparison.OrdinalIgnoreCase));
     }
 
     private static string PasswordFor(JobEndpoint e, JobEndpoint? stored, string? lang)

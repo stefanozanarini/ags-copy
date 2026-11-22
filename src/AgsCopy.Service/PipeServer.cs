@@ -21,6 +21,7 @@ public sealed class PipeServer(
     ServiceSettings settings,
     JobExecutor executor,
     Scheduler scheduler,
+    RestoreManager restore,
     ILogger<PipeServer> log) : BackgroundService
 {
     private static readonly string Version =
@@ -183,6 +184,24 @@ public sealed class PipeServer(
                 return executor.TestPath(r, store.Get(r.JobId), lang);
             }
 
+            case Commands.RestorePoints:
+                return await Task.Run(() => restore.Points(P<IdRequest>().Id, lang), ct);
+
+            case Commands.RestoreList:
+            {
+                var r = P<RestoreListRequest>();
+                return await Task.Run(() => restore.List(r, lang), ct);
+            }
+
+            case Commands.RestoreStart:
+                return new IdRequest { Id = restore.Start(P<RestoreStartRequest>(), lang) };
+
+            case Commands.RestoreStatus:
+                return restore.Status(P<IdRequest>().Id, lang);
+
+            case Commands.RestoreCancel:
+                return restore.Cancel(P<IdRequest>().Id);
+
             case Commands.ListPath:
             {
                 var r = P<PathListRequest>();
@@ -231,7 +250,7 @@ public sealed class PipeServer(
                 Name = job.Name,
                 Enabled = job.Enabled,
                 Mode = job.Mode,
-                Source = job.Source.Path,
+                Source = job.SourceSummary,
                 Destination = job.Destination.Path,
                 Schedule = job.Schedule,
                 Running = running != null,

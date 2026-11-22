@@ -18,7 +18,16 @@ jobs:
         with:
           dotnet-version: 8.0.x
       - run: dotnet build -c Release
-      - run: dotnet test tests/AgsCopy.Core.Tests -c Release --no-build
+
+      # A throwaway SFTP server for the SFTP tests (they are skipped when AGSCOPY_SFTP is not set).
+      - name: Start an SFTP test server
+        run: |
+          docker run -d --name sftp -p 2222:22 atmoz/sftp backup:Test-Pass-123:1001::upload
+          for i in $(seq 1 30); do nc -z 127.0.0.1 2222 && break; sleep 1; done
+
+      - run: dotnet test tests/AgsCopy.Core.Tests -c Release --no-build --logger "console;verbosity=normal"
+        env:
+          AGSCOPY_SFTP: 127.0.0.1:2222:backup:Test-Pass-123:/upload
 
   msi:
     needs: test
@@ -43,7 +52,15 @@ jobs:
         shell: pwsh
         run: build\package.ps1 -Version ${{ steps.version.outputs.version }}
 
+      # Installs the MSI on this runner and checks real runs, shadow copies, NTFS compression,
+      # versions, restore and the watchdog. A failure here stops the release.
+      - name: End-to-end test on Windows
+        shell: pwsh
+        run: build\e2e.ps1 -Msi (Get-Item publish\AGS-Copy-*.msi).FullName
+
+      # Kept even when the end-to-end test fails, to try the build by hand.
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: AGS-Copy-${{ steps.version.outputs.version }}
           path: |

@@ -33,6 +33,11 @@ public static class Commands
     public const string PauseScheduler = "scheduler.pause";
     public const string RunReport = "report.run";
     public const string ReportBundle = "report.bundle";
+    public const string RestorePoints = "restore.points";
+    public const string RestoreList = "restore.list";
+    public const string RestoreStart = "restore.start";
+    public const string RestoreStatus = "restore.status";
+    public const string RestoreCancel = "restore.cancel";
 
     public static bool IsReadOnly(string command) => command is Status or ListJobs or History;
 }
@@ -97,6 +102,43 @@ public sealed class PathListResult
     public List<PathEntry> Entries { get; set; } = [];
     /// <summary>Items in the folder; more than Entries when the listing was cut.</summary>
     public int Total { get; set; }
+}
+
+public sealed class RestoreListRequest
+{
+    public Guid JobId { get; set; }
+    /// <summary>Version folder stamp of the restore point; null = the current copy.</summary>
+    public string? Stamp { get; set; }
+    public string Relative { get; set; } = "";
+}
+
+public sealed class RestoreStartRequest
+{
+    public Guid JobId { get; set; }
+    public string? Stamp { get; set; }
+    /// <summary>Files and folders to restore, relative to the backup root, '/' separated.</summary>
+    public List<string> Items { get; set; } = [];
+    /// <summary>Folder to restore into (local or \\server\share); never inside the job's source.</summary>
+    public string Target { get; set; } = "";
+    public bool Overwrite { get; set; }
+}
+
+public sealed class RestoreStatusResponse
+{
+    public Guid Id { get; set; }
+    public bool Running { get; set; }
+    /// <summary>Still listing what to restore.</summary>
+    public bool Scanning { get; set; }
+    public long Files { get; set; }
+    public long Bytes { get; set; }
+    public long TotalFiles { get; set; }
+    public long TotalBytes { get; set; }
+    public long Skipped { get; set; }
+    public bool Cancelled { get; set; }
+    public string? Error { get; set; }
+    public string Target { get; set; } = "";
+    public List<Robocopy.CopyError> Errors { get; set; } = [];
+    public long ErrorCount { get; set; }
 }
 
 public sealed class LogRequest

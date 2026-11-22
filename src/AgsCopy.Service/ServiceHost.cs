@@ -19,6 +19,7 @@ public static class ServiceHost
         builder.Services.AddSingleton<ReportStore>();
         builder.Services.AddSingleton<JobExecutor>();
         builder.Services.AddSingleton<Scheduler>();
+        builder.Services.AddSingleton<RestoreManager>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<JobExecutor>());
         builder.Services.AddHostedService(sp => sp.GetRequiredService<Scheduler>());
         builder.Services.AddHostedService<PipeServer>();

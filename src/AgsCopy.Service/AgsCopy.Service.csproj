@@ -13,8 +13,6 @@
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.1" />
     <PackageReference Include="System.Management" Version="8.0.0" />
-    <!-- SFTP sources and destinations. -->
-    <PackageReference Include="SSH.NET" Version="2026.0.1" />
   </ItemGroup>
 
   <ItemGroup>
