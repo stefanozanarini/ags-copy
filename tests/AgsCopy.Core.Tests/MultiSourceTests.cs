@@ -250,6 +250,79 @@ public class LinkedFolderTests
     }
 
     [Fact]
+    public void Many_threads_find_the_same_links_in_the_same_order()
+    {
+        var one = LinkedFolders.Find(@"\\srv\share", ListShare, p => Ids.GetValueOrDefault(p), new Exclusions(Job(@"\\srv\share")), true, default);
+        var many = LinkedFolders.Find(@"\\srv\share", ListShare, p => Ids.GetValueOrDefault(p), new Exclusions(Job(@"\\srv\share")), true, default, threads: 8);
+        Assert.Equal(one.Links, many.Links);
+        Assert.Equal(one.Loops, many.Loops);
+    }
+
+    [Fact]
+    public void The_namespace_lists_its_links_whatever_server_name_it_gives()
+    {
+        string[] entries =
+        [
+            @"\\CORP\dfs", @"\\CORP\dfs\Sales", @"\\CORP\dfs\Depts\IT", @"\\CORP\dfs\Old",
+            @"\\CORP\dfs\_AGS-Copy-Versions\X", @"\\CORP\other\Sales",
+        ];
+        var scan = LinkedFolders.FromNamespace(@"\\corp.lan\dfs", entries, new Exclusions(Job(@"\\corp.lan\dfs", "Old")));
+        Assert.Equal([@"Depts\IT", "Sales"], scan.Links.Select(l => l.Relative));
+        Assert.Equal(@"\\corp.lan\dfs\Depts\IT", scan.Links[0].Path);
+        Assert.All(scan.Links, l => Assert.Equal(LinkKind.Dfs, l.Kind));
+
+        // A source below a namespace folder sees only the links under it.
+        var depts = LinkedFolders.FromNamespace(@"\\corp.lan\dfs\Depts", entries, new Exclusions(Job(@"\\corp.lan\dfs\Depts")));
+        Assert.Equal(["IT"], depts.Links.Select(l => l.Relative));
+    }
+
+    [Fact]
+    public void Links_of_the_last_walk_are_kept_only_while_they_still_are_links()
+    {
+        LinkedFolder[] last =
+        [
+            new("Root", @"\\srv\share\Root", LinkKind.Junction),          // still a junction
+            new(@"Data\Proj", @"\\srv\share\Data\Proj", LinkKind.Junction), // now a plain folder
+            new(@"Data\Back", @"\\srv\share\Data\Back", LinkKind.Junction), // now points back at the share
+            new("Gone", @"\\srv\share\Gone", LinkKind.Junction),          // removed
+            new("Sales", @"\\srv\share\Sales", LinkKind.Dfs),             // still a DFS link
+            new("Skip", @"\\srv\share\Skip", LinkKind.Junction),          // excluded since
+        ];
+        var entries = new Dictionary<string, FolderEntry>(StringComparer.OrdinalIgnoreCase)
+        {
+            [@"\\srv\share\Root"] = new("Root", false, true, true),
+            [@"\\srv\share\Data\Proj"] = new("Proj", false, false, false),
+            [@"\\srv\share\Data\Back"] = new("Back", false, true, true),
+            [@"\\srv\share\Sales"] = new("Sales", true, false, true),
+            [@"\\srv\share\Skip"] = new("Skip", false, true, true),
+        };
+        var kept = LinkedFolders.Recheck(@"\\srv\share", last, p => entries.GetValueOrDefault(p), p => Ids.GetValueOrDefault(p),
+            new Exclusions(Job(@"\\srv\share", "Skip")), true, default);
+        Assert.Equal(["Root", "Sales"], kept.Select(l => l.Relative));
+
+        // Junctions no longer followed: only the DFS link stays.
+        var dfsOnly = LinkedFolders.Recheck(@"\\srv\share", last, p => entries.GetValueOrDefault(p), p => Ids.GetValueOrDefault(p),
+            new Exclusions(Job(@"\\srv\share")), false, default);
+        Assert.Equal(["Sales"], dfsOnly.Select(l => l.Relative));
+    }
+
+    [Fact]
+    public void The_links_of_a_walk_are_saved_per_source()
+    {
+        var scan = LinkedFolders.Find(@"\\srv\share", ListShare, p => Ids.GetValueOrDefault(p), new Exclusions(Job(@"\\srv\share")), true, default);
+        var cache = new LinkCache();
+        cache.Put(@"\\srv\share\", scan, DateTime.UtcNow);
+        cache.Put(@"\\srv\other", new LinkScan(), DateTime.UtcNow);
+        cache.Put(@"\\SRV\share", scan, DateTime.UtcNow);
+        var back = System.Text.Json.JsonSerializer.Deserialize<LinkCache>(System.Text.Json.JsonSerializer.Serialize(cache, Json.Options), Json.Options)!;
+        Assert.Equal(2, back.Sources.Count);
+        Assert.Equal(scan.Links, back.Get(@"\\srv\share")!.Links);
+        Assert.Equal(scan.Loops, back.Get(@"\\srv\share")!.Loops);
+        Assert.Empty(back.Get(@"\\srv\other")!.Links);
+        Assert.Null(back.Get(@"\\srv\none"));
+    }
+
+    [Fact]
     public void Without_the_option_junctions_stay_skipped()
     {
         var scan = LinkedFolders.Find(@"\\srv\share", ListShare, null, new Exclusions(Job(@"\\srv\share")), false, default);

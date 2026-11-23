@@ -263,6 +263,7 @@ public sealed class PipeServer(
                 TotalFiles = running?.TotalFiles ?? 0,
                 TotalBytes = running?.TotalBytes ?? 0,
                 Scanning = running?.Scanning ?? false,
+                CountsOnly = running is { TotalsKnown: false },
                 NextRunLocal = scheduler.NextRun(job),
                 LastRun = running == null ? history.Last(job.Id) : history.List(job.Id, 2).Skip(1).FirstOrDefault(),
             });

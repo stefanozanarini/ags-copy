@@ -91,15 +91,71 @@ public static class DfsClient
     /// <summary>
     /// The links below a share source to follow. Without junctions only a DFS namespace is looked at:
     /// nothing when the source is not in one, or is inside a link already (a link's target is a plain
-    /// share, which the DFS client reaches by itself). With junctions the whole share is walked.
+    /// share, which the DFS client reaches by itself). The namespace is asked for its links; only when it
+    /// does not answer are its folders walked. With junctions the whole share is walked, many folders at once.
     /// </summary>
     public static LinkScan FindLinks(string source, Exclusions exclusions, bool followJunctions, CancellationToken ct)
     {
         var src = PathUtil.NormalizeDir(source);
         if (!PathUtil.IsUnc(src)) return new LinkScan();
-        if (followJunctions) return LinkedFolders.Find(src, Folders, FolderId, exclusions, true, ct);
+        if (followJunctions) return LinkedFolders.Find(src, Folders, FolderId, exclusions, true, ct, threads: LinkedFolders.WalkThreads);
         if (EntryOf(src) is not { } entry || IsLinkEntry(entry)) return new LinkScan();
-        return LinkedFolders.Find(src, Folders, null, exclusions, false, ct);
+        return NamespaceLinks(src, exclusions)
+            ?? LinkedFolders.Find(src, Folders, null, exclusions, false, ct, threads: LinkedFolders.WalkThreads);
+    }
+
+    /// <summary>
+    /// The DFS links below a source in a namespace as the namespace lists them; an empty scan outside a
+    /// namespace or inside a link, null when the namespace does not answer.
+    /// </summary>
+    public static LinkScan? NamespaceLinks(string source, Exclusions exclusions)
+    {
+        var src = PathUtil.NormalizeDir(source);
+        if (!PathUtil.IsUnc(src) || EntryOf(src) is not { } entry || IsLinkEntry(entry)) return new LinkScan();
+        return LinksOf(entry) is { } entries ? LinkedFolders.FromNamespace(src, entries, exclusions) : null;
+    }
+
+    /// <summary>
+    /// Every entry of a namespace (\\server\namespace and its links), from the namespace itself: one
+    /// call however big the shares behind it. Null when the namespace does not answer.
+    /// </summary>
+    public static List<string>? LinksOf(string namespaceRoot)
+    {
+        const int moreData = 234, noMoreItems = 259;
+        try
+        {
+            var entries = new List<string>();
+            var resume = 0;
+            for (var call = 0; call < 10_000; call++)
+            {
+                var rc = NetDfsEnum(namespaceRoot, 1, uint.MaxValue, out var buffer, out var read, ref resume);
+                try
+                {
+                    if (rc is 0 or moreData)
+                        for (var i = 0; i < read; i++)
+                            if (Marshal.PtrToStringUni(Marshal.ReadIntPtr(buffer, i * IntPtr.Size)) is { } e) entries.Add(e);
+                }
+                finally
+                {
+                    if (buffer != IntPtr.Zero) NetApiBufferFree(buffer);
+                }
+                if (rc == noMoreItems || (rc == 0 && read == 0)) return entries;
+                if (rc is not (0 or moreData)) return entries.Count > 0 ? entries : null;
+            }
+            return entries;
+        }
+        catch (Exception e) when (e is DllNotFoundException or EntryPointNotFoundException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>A folder as its parent lists it (DFS link, junction, plain); null when it is not there.</summary>
+    public static FolderEntry? EntryAt(string path)
+    {
+        using var handle = FindFirstFileExW(LongPath(path).TrimEnd('\\'), FindExInfoBasic, out var data, FindExSearchLimitToDirectories, IntPtr.Zero, 0);
+        if (handle.IsInvalid || (data.dwFileAttributes & (uint)FileAttributes.Directory) == 0) return null;
+        return Entry(data, path);
     }
 
     private static string LongPath(string path) =>
@@ -126,17 +182,21 @@ public static class DfsClient
         do
         {
             if ((data.dwFileAttributes & (uint)FileAttributes.Directory) == 0 || data.cFileName is "." or "..") continue;
-            var reparse = (data.dwFileAttributes & (uint)FileAttributes.ReparsePoint) != 0;
-            // Over SMB the tag comes with the listing. A DFS link has IO_REPARSE_TAG_DFS; when a server reports
-            // a tag that is neither that nor a junction or symbolic link, the DFS client is asked.
-            var tag = reparse ? data.dwReserved0 : 0;
-            var junction = tag == ReparseTagMountPoint;
-            var link = reparse && (tag == ReparseTagDfs
-                || (!junction && tag != ReparseTagSymlink && IsLinkFolder(PathUtil.Combine(path, data.cFileName))));
-            list.Add(new FolderEntry(data.cFileName, link, junction, reparse));
+            list.Add(Entry(data, PathUtil.Combine(path, data.cFileName)));
         }
         while (FindNextFileW(handle, out data));
         return list;
+    }
+
+    private static FolderEntry Entry(Win32FindData data, string fullPath)
+    {
+        var reparse = (data.dwFileAttributes & (uint)FileAttributes.ReparsePoint) != 0;
+        // Over SMB the tag comes with the listing. A DFS link has IO_REPARSE_TAG_DFS; when a server reports
+        // a tag that is neither that nor a junction or symbolic link, the DFS client is asked.
+        var tag = reparse ? data.dwReserved0 : 0;
+        var junction = tag == ReparseTagMountPoint;
+        var link = reparse && (tag == ReparseTagDfs || (!junction && tag != ReparseTagSymlink && IsLinkFolder(fullPath)));
+        return new FolderEntry(data.cFileName, link, junction, reparse);
     }
 
     private static bool IsLinkFolder(string path) =>
@@ -205,6 +265,9 @@ public static class DfsClient
 
     [DllImport("netapi32.dll", CharSet = CharSet.Unicode)]
     private static extern int NetDfsGetClientInfo(string dfsEntryPath, string? serverName, string? shareName, int level, out IntPtr buffer);
+
+    [DllImport("netapi32.dll", CharSet = CharSet.Unicode)]
+    private static extern int NetDfsEnum(string dfsName, int level, uint prefMaxLen, out IntPtr buffer, out int entriesRead, ref int resumeHandle);
 
     [DllImport("netapi32.dll")]
     private static extern int NetApiBufferFree(IntPtr buffer);

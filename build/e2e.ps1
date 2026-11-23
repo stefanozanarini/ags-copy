@@ -226,14 +226,36 @@ try {
         deletionConfirmed = $true
         options = @{ skipJunctions = $true; followShareJunctions = $true; autoTune = $true }
     }
+    # A copy made earlier (by another tool): the first run copies before its walk has found the junction,
+    # and must not purge that copy as an extra meanwhile.
+    New-Item -ItemType Directory -Force "$work\sharecopy\linked\inner" | Out-Null
+    Copy-Item "$outside\inner\o.txt" "$work\sharecopy\linked\inner\o.txt"
+    $late = { param($r) $r.message -like '*found during the copy*' -or $r.message -like '*trovati durante la copia*' }
     foreach ($n in 1, 2) {
         $run = RunJob $sjob.id
         Check ($run.outcome -eq 'Success') "run $($n): $($run.outcome): $($run.message)"
         Check ((Text "$work\sharecopy\linked\inner\o.txt") -eq 'behind the junction') "run $($n): junction followed into another folder"
+        if ($n -eq 1) {
+            Check (& $late $run) 'run 1: the junction, found by the walk during the copy, copied at the end'
+            Check ($run.dirsExtra -eq 0 -and $run.filesExtra -eq 0) "run 1: the earlier copy behind the junction not purged meanwhile ($($run.dirsExtra) folders, $($run.filesExtra) files)"
+            Check (Test-Path "$env:ProgramData\AGS-Copy\links\$($sjob.id -replace '-', '').json") 'links of the walk saved for the next run'
+        }
+        else {
+            Check (-not (& $late $run)) 'run 2: the junction known from run 1, copied with the rest'
+        }
     }
     Check ((Text "$work\sharecopy\top.txt") -eq 'on the share') 'share content copied'
     Check (-not (Test-Path "$work\sharecopy\loop")) 'junction back to the share not followed'
     Check ($run.message -like '*loop*' -or $run.message -like '*ciclo*') 'report names the loop'
+
+    $outside2 = "$work\outside2"
+    New-Item -ItemType Directory -Force $outside2 | Out-Null
+    [System.IO.File]::WriteAllText("$outside2\n.txt", 'new junction')
+    cmd /c mklink /J "$shareDir\later" "$outside2" | Out-Null
+    $run = RunJob $sjob.id
+    Check ($run.outcome -eq 'Success' -and (& $late $run)) "run 3: a new junction found during the copy: $($run.message)"
+    Check ((Text "$work\sharecopy\later\n.txt") -eq 'new junction') 'run 3: new junction copied'
+    Check ((Text "$work\sharecopy\linked\inner\o.txt") -eq 'behind the junction') 'run 3: known junction still copied'
 }
 finally {
     Remove-SmbShare -Name 'agse2e' -Force -ErrorAction SilentlyContinue
@@ -248,7 +270,7 @@ Check ($gui.ExitCode -eq 0) "GUI self-test exit code $($gui.ExitCode):`n    $gui
 
 Step 'The source was never written'
 Check (-not (Test-Path "$src2\restore")) 'nothing created in the second source'
-Check ((Get-Item "$shareDir\loop").LinkType -eq 'Junction' -and (Get-Item "$shareDir\linked").LinkType -eq 'Junction') 'junctions in the share untouched'
+Check ((Get-Item "$shareDir\loop").LinkType -eq 'Junction' -and (Get-Item "$shareDir\linked").LinkType -eq 'Junction' -and (Get-Item "$shareDir\later").LinkType -eq 'Junction') 'junctions in the share untouched'
 Check (-not (Test-Path "$src\restore")) 'nothing created in the source'
 Check (((Get-Item "$src\a.txt").Attributes -band [IO.FileAttributes]::Compressed) -eq 0) 'source not compressed'
 

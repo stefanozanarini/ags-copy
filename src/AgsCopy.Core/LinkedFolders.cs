@@ -46,41 +46,31 @@ public static class LinkedFolders
     /// <summary>Following junctions walks the whole share; past this many folders the look stops.</summary>
     public const int MaxFolders = 2_000_000;
 
+    /// <summary>Threads that list folders at once when a whole share is walked: over SMB each listing mostly waits on the network.</summary>
+    public const int WalkThreads = 16;
+
     /// <param name="list">The sub-folders of a folder.</param>
     /// <param name="folderId">Identity of a folder (volume and file id) once its links are followed; needed to follow junctions.</param>
+    /// <param name="threads">Folders listed at once. The walk goes level by level, so the result does not depend on it.</param>
     public static LinkScan Find(string root, Func<string, IEnumerable<FolderEntry>> list, Func<string, string?>? folderId, Exclusions exclusions,
-        bool followJunctions, CancellationToken ct, int? maxFolders = null)
+        bool followJunctions, CancellationToken ct, int? maxFolders = null, int threads = 1)
     {
         var scan = new LinkScan();
         var max = maxFolders ?? (followJunctions ? MaxFolders : MaxNamespaceFolders);
-        var ids = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-        var pending = new Queue<(string Rel, bool BehindLink)>();
-        pending.Enqueue(("", false));
+        var ids = new System.Collections.Concurrent.ConcurrentDictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        var level = new List<(string Rel, bool BehindLink)> { ("", false) };
         var seen = 0;
 
         string Full(string rel) => rel.Length == 0 ? root : PathUtil.Combine(root, rel);
 
-        string? Id(string rel)
-        {
-            if (!ids.TryGetValue(rel, out var id)) ids[rel] = id = folderId!(Full(rel));
-            return id;
-        }
-
         // A folder whose identity is that of a folder it sits in: entering it would go round forever.
-        bool LoopsBack(string rel)
-        {
-            if (folderId == null || Id(rel) is not { } id) return false;
-            for (var i = rel.LastIndexOf('\\'); ; i = rel.LastIndexOf('\\', i - 1))
-            {
-                if (Id(i < 0 ? "" : rel[..i]) == id) return true;
-                if (i <= 0) return false;
-            }
-        }
+        bool LoopsBack(string rel) => folderId != null && LoopsBackTo(rel, r => ids.GetOrAdd(r, x => folderId(Full(x))));
 
-        while (pending.Count > 0)
+        // What one folder holds: links, loops, and the folders to walk next, in the order listed.
+        List<(Found What, string Rel, bool Behind, bool IsDfs)> Visit((string Rel, bool BehindLink) folder)
         {
-            ct.ThrowIfCancellationRequested();
-            var (rel, behindLink) = pending.Dequeue();
+            var (rel, behindLink) = folder;
+            var found = new List<(Found, string, bool, bool)>();
             foreach (var f in list(Full(rel)))
             {
                 var child = rel.Length == 0 ? f.Name : rel + "\\" + f.Name;
@@ -91,31 +81,151 @@ public static class LinkedFolders
                 {
                     if (followJunctions && LoopsBack(child))
                     {
-                        scan.Loops.Add(child);
+                        found.Add((Found.Loop, child, false, false));
                         continue;
                     }
-                    scan.Links.Add(new LinkedFolder(child, Full(child), f.IsDfsLink ? LinkKind.Dfs : LinkKind.Junction));
+                    found.Add((Found.Link, child, false, f.IsDfsLink));
                     // Junctions may sit anywhere behind a link too; DFS links do not nest.
-                    if (followJunctions) Enqueue(child, true);
+                    if (followJunctions) found.Add((Found.Folder, child, true, false));
                     continue;
                 }
                 if (f.IsReparsePoint) continue; // symbolic links, and junctions the job does not follow
                 // Behind a junction a plain folder may be the way back up (a junction to the drive root).
                 if (behindLink && LoopsBack(child))
                 {
-                    scan.Loops.Add(child);
+                    found.Add((Found.Loop, child, false, false));
                     continue;
                 }
-                Enqueue(child, behindLink);
+                found.Add((Found.Folder, child, behindLink, false));
             }
+            return found;
+        }
+
+        while (level.Count > 0)
+        {
+            ct.ThrowIfCancellationRequested();
+            var results = new List<(Found What, string Rel, bool Behind, bool IsDfs)>[level.Count];
+            if (threads <= 1 || level.Count == 1)
+            {
+                for (var i = 0; i < level.Count; i++) results[i] = Visit(level[i]);
+            }
+            else
+            {
+                try
+                {
+                    Parallel.For(0, level.Count, new ParallelOptions { MaxDegreeOfParallelism = threads, CancellationToken = ct }, i => results[i] = Visit(level[i]));
+                }
+                catch (AggregateException e)
+                {
+                    System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(e.InnerExceptions[0]).Throw();
+                }
+            }
+
+            var next = new List<(string, bool)>();
+            foreach (var (what, rel, behind, isDfs) in results.SelectMany(r => r))
+            {
+                switch (what)
+                {
+                    case Found.Link:
+                        scan.Links.Add(new LinkedFolder(rel, Full(rel), isDfs ? LinkKind.Dfs : LinkKind.Junction));
+                        break;
+                    case Found.Loop:
+                        scan.Loops.Add(rel);
+                        break;
+                    default:
+                        if (++seen < max) next.Add((rel, behind));
+                        else scan.Truncated = true;
+                        break;
+                }
+            }
+            level = next;
         }
         return scan;
+    }
 
-        void Enqueue(string rel, bool behind)
+    private enum Found
+    {
+        Folder,
+        Link,
+        Loop,
+    }
+
+    /// <summary>Whether the folder at <paramref name="rel"/> is one of the folders it sits in ("" = the root).</summary>
+    private static bool LoopsBackTo(string rel, Func<string, string?> id)
+    {
+        if (id(rel) is not { } own) return false;
+        for (var i = rel.LastIndexOf('\\'); ; i = rel.LastIndexOf('\\', i - 1))
         {
-            if (++seen < max) pending.Enqueue((rel, behind));
-            else scan.Truncated = true;
+            if (id(i < 0 ? "" : rel[..i]) == own) return true;
+            if (i <= 0) return false;
         }
+    }
+
+    /// <summary>
+    /// The DFS links below a source in a namespace, from the namespace's own list of links
+    /// (\\server\namespace\link\path, as NetDfsEnum gives them) instead of walking its folders.
+    /// The server name the namespace reports may differ from the one in the source (NetBIOS or DNS):
+    /// only the part after the namespace counts.
+    /// </summary>
+    public static LinkScan FromNamespace(string source, IEnumerable<string> entries, Exclusions exclusions)
+    {
+        var scan = new LinkScan();
+        var src = PathUtil.NormalizeDir(source).TrimStart('\\').Split('\\', StringSplitOptions.RemoveEmptyEntries);
+        if (src.Length < 2) return scan;
+        var below = src.Skip(2).ToList(); // the source's folders inside the namespace
+        foreach (var entry in entries)
+        {
+            var parts = entry.TrimStart('\\').Split('\\', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length <= 2 || !string.Equals(parts[1], src[1], StringComparison.OrdinalIgnoreCase)) continue;
+            var inNamespace = parts.Skip(2).ToList();
+            if (inNamespace.Count <= below.Count
+                || !inNamespace.Take(below.Count).SequenceEqual(below, StringComparer.OrdinalIgnoreCase)) continue;
+            var relParts = inNamespace.Skip(below.Count).ToList();
+            if (relParts[0].Equals(Versions.FolderName, StringComparison.OrdinalIgnoreCase)) continue;
+            var rel = string.Join('\\', relParts);
+            if (Excluded(rel, exclusions)) continue;
+            if (scan.Links.Any(l => l.Relative.Equals(rel, StringComparison.OrdinalIgnoreCase))) continue;
+            scan.Links.Add(new LinkedFolder(rel, PathUtil.Combine(source, rel), LinkKind.Dfs));
+        }
+        scan.Links.Sort((a, b) => StringComparer.OrdinalIgnoreCase.Compare(a.Relative, b.Relative));
+        return scan;
+    }
+
+    /// <summary>The walk does not go into an excluded folder: a link in one, or below one, is not followed.</summary>
+    private static bool Excluded(string rel, Exclusions exclusions)
+    {
+        var parts = rel.Split('\\');
+        return Enumerable.Range(1, parts.Length).Any(n => exclusions.Excludes(string.Join('\\', parts.Take(n)), true));
+    }
+
+    /// <summary>
+    /// The links of an earlier walk that still are what they were: the folder is still there and still a
+    /// DFS link or a junction (followed only with <paramref name="followJunctions"/>), and a junction does
+    /// not lead back to a folder it is in. Checking a few folders takes moments; walking the share again
+    /// takes as long as the share is big.
+    /// </summary>
+    /// <param name="entry">The folder itself as its parent lists it; null when it is gone.</param>
+    public static List<LinkedFolder> Recheck(string root, IEnumerable<LinkedFolder> links, Func<string, FolderEntry?> entry, Func<string, string?> folderId,
+        Exclusions exclusions, bool followJunctions, CancellationToken ct)
+    {
+        var ids = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        string? Id(string rel)
+        {
+            if (!ids.TryGetValue(rel, out var id)) ids[rel] = id = folderId(rel.Length == 0 ? root : PathUtil.Combine(root, rel));
+            return id;
+        }
+
+        var kept = new List<LinkedFolder>();
+        foreach (var l in links)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (Excluded(l.Relative, exclusions)) continue; // the job's exclusions may have changed since
+            var path = PathUtil.Combine(root, l.Relative);
+            if (entry(path) is not { } e) continue;
+            var ok = l.Kind == LinkKind.Dfs ? e.IsDfsLink : e.IsJunction && followJunctions && !LoopsBackTo(l.Relative, Id);
+            if (ok) kept.Add(l with { Path = path });
+        }
+        return kept;
     }
 
     /// <summary>Links directly below <paramref name="relative"/> ("" = the source), not behind another one.</summary>
@@ -147,6 +257,32 @@ public static class LinkedFolders
             j.Options.ExcludeDirectories.Add(PathUtil.Combine(job.Destination.Path, l.Relative));
         }
         return j;
+    }
+}
+
+/// <summary>
+/// What the last walk of each share source of a job found, so the next run can start copying with those
+/// links at once while the share is walked again.
+/// </summary>
+public sealed class LinkCache
+{
+    public sealed class Entry
+    {
+        public string Source { get; set; } = "";
+        public DateTime WalkedUtc { get; set; }
+        public List<LinkedFolder> Links { get; set; } = [];
+        public List<string> Loops { get; set; } = [];
+    }
+
+    public List<Entry> Sources { get; set; } = [];
+
+    public Entry? Get(string source) =>
+        Sources.FirstOrDefault(e => string.Equals(e.Source, PathUtil.NormalizeDir(source), StringComparison.OrdinalIgnoreCase));
+
+    public void Put(string source, LinkScan scan, DateTime walkedUtc)
+    {
+        Sources.RemoveAll(e => string.Equals(e.Source, PathUtil.NormalizeDir(source), StringComparison.OrdinalIgnoreCase));
+        Sources.Add(new Entry { Source = PathUtil.NormalizeDir(source), WalkedUtc = walkedUtc, Links = [.. scan.Links], Loops = [.. scan.Loops] });
     }
 }
 

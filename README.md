@@ -33,7 +33,8 @@ through AGS-Copy's own copy engine. The interface is in Italian (default) and En
 - **DFS namespaces**: a `\\domain\namespace\...` source is followed through its links.
   Robocopy sees DFS links as junctions, so `/XJ` would skip them, and the copy engine leaves
   reparse points out. AGS-Copy therefore asks the Windows DFS client which folders below the
-  source are links and copies each one, from the share it points to, into the same place in the
+  source are links (the namespace lists them itself, in one call, whatever its size; its folders
+  are walked only when it does not answer) and copies each one, from the share it points to, into the same place in the
   destination. The rest of the source is copied without the links, which are excluded on both
   sides, so a mirror never deletes their copies. The link targets are connected with the source's
   credentials. A source already inside a link needs nothing: the DFS client follows it. Through
@@ -44,11 +45,15 @@ through AGS-Copy's own copy engine. The interface is in Italian (default) and En
   same (option *On network shares, follow directory junctions anyway*, on by default). The file
   server resolves them on its own disks, so a junction to another disk of the server brings that
   folder into the copy. Robocopy is not left to follow them, since a junction that points back to
-  a folder above it would loop. Before each copy AGS-Copy walks the share and finds the junctions.
-  It compares folder identities (volume and file id) to leave out the loops, then copies each
-  junction as a source of its own, as it does for DFS links. Symbolic links stay excluded. The
-  walk adds a pass over the share's folders to each run. Without `/XJ`, robocopy and the engine
-  follow everything themselves.
+  a folder above it would loop. AGS-Copy walks the share, many folders at once, and finds the
+  junctions. It compares folder identities (volume and file id) to leave out the loops, then copies
+  each junction as a source of its own, as it does for DFS links. Symbolic links stay excluded.
+  The copy does not wait for the walk: it starts at once with the links already known (those the
+  last walk found that are still links, and the namespace's DFS links) while the walk goes on, and
+  links the walk finds besides are copied at the end of the same run (the report says which). The
+  first run of a job thus copies its junctions last; later runs copy them with the rest. The copy
+  engine (SFTP, `.gz`) still waits for the walk. Without `/XJ`, robocopy and the engine follow
+  everything themselves.
 - **Layout preview**: when a job has one source and one destination, adding them (or *Preview the
   layout*, for the selected source and destination) opens a window. It shows the source folder
   next to how the destination will look after the copy, folder by
@@ -74,7 +79,8 @@ through AGS-Copy's own copy engine. The interface is in Italian (default) and En
 - **File versions** (optional, per job): before each copy, destination files that robocopy
   would overwrite or (in Mirror) delete are moved to
   `Destination\_AGS-Copy-Versions\<yyyy-MM-dd_HHmmss>\`, keeping their relative path.
-  - A `robocopy /L` pass decides what to move.
+  - A `robocopy /L` pass decides what to move. With parallel processes each lists its own part
+    and starts copying as soon as its part is moved, while the others are still listing.
   - Version folders older than the retention (days, 0 = forever) are deleted when each run
     starts, before anything is copied, so they make room first.
   - The versions folder is always excluded from robocopy, so a mirror never purges it.
@@ -113,9 +119,11 @@ through AGS-Copy's own copy engine. The interface is in Italian (default) and En
     `name.gz` while it is copied, so no temporary space is needed on the PC. 7-Zip and Windows 11
     Explorer open them.
 - **Progress bar** in the job list while a job runs: percentage, bytes and files done out of the
-  total, and an estimate of the time left. Robocopy jobs first run a quick `robocopy /L` pass for
-  the totals (the bar moves without a percentage meanwhile); the same pass tells what versions
-  must keep. The tray tooltip shows the percentage.
+  total, and an estimate of the time left. Robocopy jobs start copying at once, without listing the
+  whole tree first: the bar shows the bytes and files copied so far, and a percentage only when
+  the `robocopy /L` pass of versions (or extras deleted first) has given the totals. The copy
+  engine plans everything first and always shows a percentage. The tray tooltip shows the
+  percentage, or the bytes copied.
 - **Two modes**:
   - *Copy* (`/E`) never deletes anything.
   - *Mirror* (`/MIR`) deletes destination items the source no longer has. It is shown in red
@@ -246,7 +254,9 @@ which runs only on Windows: `build\package.ps1 [-Version x.y.z]` gives
   - saves a job with two sources: overlapping sources and a shared folder are refused. It then
     runs the job twice and restores both sources from one restore point;
   - shares a folder over SMB with a junction to another folder and one back to the share itself,
-    then checks that the first is copied and the loop is not;
+    then checks that the first is copied and the loop is not, that the first run copies the
+    junction found by its walk at the end without purging an earlier copy of it meanwhile, that
+    the next run starts with it, and that a junction added later is found and copied;
   - saves a job with two destinations and *delete extras first*, then checks both copies, the
     extras deleted before the copy, nested destinations refused, and a restore from the second
     destination;

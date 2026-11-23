@@ -204,6 +204,9 @@ public sealed class JobStatus
     /// <summary>The run is comparing source and destination before copying.</summary>
     public bool Scanning { get; set; }
 
+    /// <summary>Copying while the totals are still being learned: show what is done, not a percentage.</summary>
+    public bool CountsOnly { get; set; }
+
     public DateTime? NextRunLocal { get; set; }
     public RunRecord? LastRun { get; set; }
 }

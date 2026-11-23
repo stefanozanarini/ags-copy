@@ -25,6 +25,12 @@ public sealed class RunningJob
     public long TotalBytes { get; set; }
     public bool Scanning { get; set; } = true;
 
+    /// <summary>
+    /// The totals cover the whole run. Robocopy runs copy without listing first unless versions need it,
+    /// and then each process lists its own part: until the last list is in, only counts are shown.
+    /// </summary>
+    public bool TotalsKnown { get; set; }
+
     public long Files
     {
         get { lock (Counters) return Counters.Sum(c => c.Files); }
@@ -163,6 +169,7 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
         var engineResults = new List<SyncResult>();
         var snapshots = new Dictionary<string, ShadowCopy>(StringComparer.OrdinalIgnoreCase);
         var runs = new List<SourceRun>();
+        using var walks = CancellationTokenSource.CreateLinkedTokenSource(ct);
         try
         {
             leases.AddRange(Connect(job, null, null));
@@ -171,7 +178,7 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
             // the whole run. With several pairs one that fails (a source unreadable, a destination offline)
             // does not stop the others. Each source has one snapshot and one look for links, whatever the destinations.
             var pairs = job.Pairs.ToList();
-            var linkScans = new Dictionary<int, List<LinkedFolder>>();
+            var linkScans = new Dictionary<int, SourceLinks>();
             var failed = 0;
             foreach (var (i, d) in pairs)
             {
@@ -179,8 +186,8 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
                 var label = job.PairLabel(i, d);
                 try
                 {
-                    runs.Add(await PrepareAsync(part, d * job.Sources.Count + i, label, rj, snapshots, leases, notes,
-                        linkScans.TryGetValue(i, out var known) ? known : null, links => linkScans[i] = links, lang, ct));
+                    if (!linkScans.TryGetValue(i, out var found)) linkScans[i] = found = new SourceLinks { WalkToken = walks.Token };
+                    runs.Add(await PrepareAsync(part, i, d * job.Sources.Count + i, label, rj, snapshots, leases, notes, found, lang, ct));
                 }
                 catch (Exception e) when (pairs.Count > 1 && e is not OperationCanceledException)
                 {
@@ -191,6 +198,9 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
             }
             rj.TotalFiles = runs.Sum(r => r.TotalFiles);
             rj.TotalBytes = runs.Sum(r => r.TotalBytes);
+            if (runs.LastOrDefault(r => r.Plan == null) is { } lastRobocopy) lastRobocopy.Last = true;
+            // The copy engine plans everything first; robocopy runs learn their totals as they go.
+            rj.TotalsKnown = runs.All(r => r.Plan != null);
             rj.Scanning = false;
 
             foreach (var run in runs)
@@ -200,6 +210,39 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
                     engineResults.Add(await RunEngineAsync(run, rj, startLocal, Path.Combine(logDir, $"{stamp}-{run.Index:00}-engine.part"), parts, notes, lang, ct));
                 else
                     await RunRobocopyAsync(run, rj, startLocal, logDir, stamp, parts, notes, versions, lang, ct);
+            }
+
+            // Links the walks found while the copy ran: each copied now, for every destination of its source.
+            foreach (var (i, found) in linkScans)
+            {
+                if (found.Walk == null) continue;
+                var label = job.Sources.Count > 1 ? job.PairLabel(i, 0) : "";
+                LinkScan scan;
+                try
+                {
+                    scan = await found.Walk;
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException or Win32Exception)
+                {
+                    notes.Add(label + Loc.Fl(lang, "run.links.failed", e.Message));
+                    continue;
+                }
+                SaveLinks(job.Id, found.Src, scan);
+                notes.AddRange(DescribeLinks(scan, lang).Select(n => label + n));
+                var known = found.Links ?? [];
+                var added = scan.Links.Where(l => !known.Any(k => k.Relative.Equals(l.Relative, StringComparison.OrdinalIgnoreCase))).ToList();
+                log.LogInformation("Source {Source}: walk done, {Count} links, {Added} not known when the copy started", found.Src, scan.Links.Count, added.Count);
+                if (added.Count == 0) continue;
+                notes.Add(label + Loc.Fl(lang, "run.links.late", added.Count, string.Join(", ", added.Take(10).Select(l => l.Relative))));
+                foreach (var run in runs.Where(r => r.Source == i && r.Plan == null))
+                {
+                    ct.ThrowIfCancellationRequested();
+                    leases.AddRange(ConnectDfsTargets(run.Part, null, run.Src, added, lang));
+                    run.Segments.Clear();
+                    AddSegments(run, run.RunJob, added, scan.Links);
+                    rj.TotalsKnown = false;
+                    await RunRobocopyAsync(run, rj, startLocal, logDir, stamp, parts, notes, versions, lang, ct);
+                }
             }
             if (failed > 0) record.Outcome = Worse(record.Outcome, failed == pairs.Count ? RunOutcome.Failed : RunOutcome.Warning);
 
@@ -219,7 +262,7 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
         }
         finally
         {
-            foreach (var run in runs) run.DeleteLists();
+            walks.Cancel();
             foreach (var snapshot in snapshots.Values)
             {
                 try
@@ -300,6 +343,27 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
     private sealed record Segment(CopyJob Job, string Src, string Dst, string Prefix)
     {
         public string? ListFile { get; set; }
+
+        public void DeleteList()
+        {
+            if (ListFile == null) return;
+            try { File.Delete(ListFile); } catch (IOException) { }
+            ListFile = null;
+        }
+    }
+
+    /// <summary>
+    /// The links of one source, looked for once whatever the destinations. With share junctions the copy
+    /// does not wait for the walk of the whole share: it starts with the links already known (those of the
+    /// last walk that are still there, and the namespace's DFS links) while <see cref="Walk"/> goes on;
+    /// links the walk finds besides are copied once the rest is done.
+    /// </summary>
+    private sealed class SourceLinks
+    {
+        public required CancellationToken WalkToken { get; init; }
+        public string Src { get; set; } = "";
+        public List<LinkedFolder>? Links { get; set; }
+        public Task<LinkScan>? Walk { get; set; }
     }
 
     /// <summary>One source of a run, ready to copy: robocopy segments with their lists, or an engine plan.</summary>
@@ -319,26 +383,19 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
         public int Threads { get; set; }
         public long TotalFiles { get; set; }
         public long TotalBytes { get; set; }
-
-        public void DeleteLists()
-        {
-            foreach (var s in Segments)
-            {
-                if (s.ListFile == null) continue;
-                try { File.Delete(s.ListFile); } catch (IOException) { }
-                s.ListFile = null;
-            }
-        }
+        /// <summary>The last robocopy run of the job.</summary>
+        public bool Last { get; set; }
+        /// <summary>Which of the job's sources this run copies.</summary>
+        public required int Source { get; init; }
     }
 
     /// <summary>
     /// Checks a source, takes its shadow copy (one per volume and run), finds the DFS links below it and
     /// scans what there is to copy.
     /// </summary>
-    /// <param name="knownLinks">The links of this source found for an earlier destination; null to look for them.</param>
-    /// <param name="foundLinks">Receives the links found, for the next destinations.</param>
-    private async Task<SourceRun> PrepareAsync(CopyJob part, int index, string label, RunningJob rj, Dictionary<string, ShadowCopy> snapshots,
-        List<NetworkShare.Lease> leases, List<string> notes, List<LinkedFolder>? knownLinks, Action<List<LinkedFolder>> foundLinks, string? lang, CancellationToken ct)
+    /// <param name="found">The links of this source: looked for with its first destination, then reused.</param>
+    private async Task<SourceRun> PrepareAsync(CopyJob part, int source, int index, string label, RunningJob rj, Dictionary<string, ShadowCopy> snapshots,
+        List<NetworkShare.Lease> leases, List<string> notes, SourceLinks found, string? lang, CancellationToken ct)
     {
         var src = PathUtil.NormalizeDir(part.Source.Path);
         var dst = PathUtil.NormalizeDir(part.Destination.Path);
@@ -347,23 +404,38 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
         if ((part.Source.IsNetwork || part.Destination.IsNetwork) && PathUtil.Overlaps(DfsClient.Resolve(src), DfsClient.Resolve(dst)))
             throw new ServiceException(Loc.Fl(lang, "err.overlap.dfs", src, dst));
 
-        var links = knownLinks ?? [];
-        if (part.Source.IsNetwork && knownLinks == null)
+        if (part.Source.IsNetwork && found.Links == null)
         {
+            found.Src = src;
+            var exclusions = new Exclusions(part);
+            var follow = part.Options.FollowsJunctionsOn(part.Source);
             try
             {
-                var scan = await Task.Run(() => DfsClient.FindLinks(src, new Exclusions(part), part.Options.FollowsJunctionsOn(part.Source), ct), ct);
-                links = scan.Links;
-                notes.AddRange(DescribeLinks(scan, lang).Select(n => label + n));
-                log.LogInformation("Source {Source}: {Count} links followed, {Loops} loops left out", src, links.Count, scan.Loops.Count);
+                if (follow && !UsesEngine(part, dst, lang, out _))
+                {
+                    // The walk of the whole share goes on while the copy runs.
+                    found.Links = await Task.Run(() => QuickLinks(part.Id, src, exclusions, ct), ct);
+                    found.Walk = Task.Run(() => DfsClient.FindLinks(src, exclusions, true, found.WalkToken), found.WalkToken);
+                    log.LogInformation("Source {Source}: copying with {Count} known links while the share is walked", src, found.Links.Count);
+                }
+                else
+                {
+                    // The copy engine reads the links as folders of one tree: it needs them all first.
+                    var scan = await Task.Run(() => DfsClient.FindLinks(src, exclusions, follow, ct), ct);
+                    found.Links = scan.Links;
+                    if (follow) SaveLinks(part.Id, src, scan);
+                    notes.AddRange(DescribeLinks(scan, lang).Select(n => label + n));
+                    log.LogInformation("Source {Source}: {Count} links followed, {Loops} loops left out", src, scan.Links.Count, scan.Loops.Count);
+                }
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
             {
                 notes.Add(label + Loc.Fl(lang, "run.links.failed", e.Message));
             }
-            leases.AddRange(ConnectDfsTargets(part, null, src, links, lang));
-            foundLinks(links);
+            found.Links ??= [];
+            leases.AddRange(ConnectDfsTargets(part, null, src, found.Links, lang));
         }
+        var links = found.Links ?? [];
 
         // From here on runJob reads the source from the snapshot, when there is one.
         var runJob = part;
@@ -389,7 +461,7 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
                 log.LogWarning(e, "Job {Name}: shadow copy failed, copying without it", part.Name);
             }
         }
-        var run = new SourceRun { Part = part, Index = index, Label = label, RunJob = runJob, Src = PathUtil.NormalizeDir(runJob.Source.Path), Dst = dst };
+        var run = new SourceRun { Part = part, Source = source, Index = index, Label = label, RunJob = runJob, Src = PathUtil.NormalizeDir(runJob.Source.Path), Dst = dst };
 
         if (UsesEngine(part, dst, lang, out var engineNote))
         {
@@ -424,24 +496,69 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
         else
         {
             run.Segments.Add(new Segment(LinkedFolders.WithoutLinks(runJob, links), run.Src, dst, ""));
-            foreach (var l in links)
-            {
-                var j = LinkedFolders.ForLink(runJob, l, links);
-                run.Segments.Add(new Segment(j, l.Path, PathUtil.NormalizeDir(j.Destination.Path), l.Relative));
-            }
-        }
-
-        // One robocopy /L pass per segment gives the totals for the progress bar and what versions must keep.
-        foreach (var s in run.Segments)
-        {
-            s.ListFile = await ListAsync(s.Job, s.Src, s.Dst, ct);
-            var totals = new PreviewAggregator(s.Src, s.Dst, part.Mode);
-            foreach (var line in File.Exists(s.ListFile) ? File.ReadLines(s.ListFile) : []) totals.Add(line);
-            run.TotalFiles += totals.Result.FilesToCopy;
-            run.TotalBytes += totals.Result.BytesToCopy;
+            AddSegments(run, runJob, links, links);
         }
         return run;
     }
+
+    /// <summary>One segment per link, each without the links below it (<paramref name="all"/>).</summary>
+    private static void AddSegments(SourceRun run, CopyJob runJob, IEnumerable<LinkedFolder> links, IReadOnlyList<LinkedFolder> all)
+    {
+        foreach (var l in links)
+        {
+            var j = LinkedFolders.ForLink(runJob, l, all);
+            run.Segments.Add(new Segment(j, l.Path, PathUtil.NormalizeDir(j.Destination.Path), l.Relative));
+        }
+    }
+
+    private static string LinksFile(Guid jobId) => Path.Combine(AppPaths.DataDir, "links", jobId.ToString("N") + ".json");
+
+    /// <summary>The links a copy can start with: those of the last walk still there, and the DFS links the namespace lists.</summary>
+    private List<LinkedFolder> QuickLinks(Guid jobId, string src, Exclusions exclusions, CancellationToken ct)
+    {
+        var links = new List<LinkedFolder>();
+        if (LoadLinks(jobId, src) is { } last)
+            links.AddRange(LinkedFolders.Recheck(src, last.Links, DfsClient.EntryAt, DfsClient.FolderId, exclusions, true, ct));
+        foreach (var l in DfsClient.NamespaceLinks(src, exclusions)?.Links ?? [])
+            if (!links.Any(k => k.Relative.Equals(l.Relative, StringComparison.OrdinalIgnoreCase))) links.Add(l);
+        return links;
+    }
+
+    private LinkCache.Entry? LoadLinks(Guid jobId, string src)
+    {
+        try
+        {
+            var file = LinksFile(jobId);
+            if (!File.Exists(file)) return null;
+            return System.Text.Json.JsonSerializer.Deserialize<LinkCache>(File.ReadAllText(file), Json.Options)?.Get(src);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+        {
+            log.LogWarning(e, "Cannot read the links found last time for {Source}", src);
+            return null;
+        }
+    }
+
+    private void SaveLinks(Guid jobId, string src, LinkScan scan)
+    {
+        var file = LinksFile(jobId);
+        try
+        {
+            lock (_linksLock)
+            {
+                var cache = File.Exists(file) ? System.Text.Json.JsonSerializer.Deserialize<LinkCache>(File.ReadAllText(file), Json.Options) ?? new() : new LinkCache();
+                cache.Put(src, scan, DateTime.UtcNow);
+                Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+                File.WriteAllText(file, System.Text.Json.JsonSerializer.Serialize(cache, Json.Options));
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+        {
+            log.LogWarning(e, "Cannot save the links found for {Source}", src);
+        }
+    }
+
+    private readonly object _linksLock = new();
 
     private static IEnumerable<string> DescribeLinks(LinkScan scan, string? lang)
     {
@@ -494,43 +611,61 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
             versions.FoldersRemoved += removed;
             if (removed > 0) notes.Add(run.Label + Loc.Fl(lang, "run.versions.removed", removed, part.Options.VersionRetentionDays));
         }
-        if (part.Mode == CopyMode.Mirror && part.Options.DeleteExtrasFirst && !part.Options.KeepVersions && Directory.Exists(run.Dst))
-        {
-            var before = versions.DeletedCount;
-            foreach (var s in run.Segments) DeleteExtras(s, versions, record, ct);
-            if (versions.DeletedCount > before)
-                notes.Add(run.Label + Loc.Fl(lang, "run.extrasfirst", Fmt.Count(versions.DeletedCount - before, culture)));
-        }
+        var extrasFirst = part.Mode == CopyMode.Mirror && part.Options.DeleteExtrasFirst && !part.Options.KeepVersions;
+        var needsList = NeedsList(part);
+        var extrasBefore = versions.DeletedCount;
+        var archivedBefore = versions.Count;
 
-        if (part.Options.KeepVersions && Directory.Exists(run.Dst))
-        {
-            var before = versions.Count;
-            foreach (var s in run.Segments)
-                ArchiveVersions(s, run.Dst, versions, startLocal, ct);
-            var count = versions.Count - before;
-            record.VersionsArchived += count;
-            if (count > 0) notes.Add(run.Label + Loc.Fl(lang, "run.versions", Fmt.Count(count, culture), Versions.RunFolder(run.Dst, startLocal)));
-        }
-        run.DeleteLists();
-
-        var tasks = new List<(RobocopyTask Task, CopyJob Job, string ConsoleSource)>();
+        var tasks = new List<(RobocopyTask Task, Segment Segment, string ConsoleSource)>();
         foreach (var s in run.Segments)
         {
             var names = s.Job.Options.Processes > 1 ? TopLevelFolders(s.Src, s.Job.Options.SkipJunctions) : [];
             var consoleSource = RobocopyProcess.AsConsoleText(s.Src);
-            tasks.AddRange(ParallelPlan.Build(s.Job, names).Select(t => (t, s.Job, consoleSource)));
+            tasks.AddRange(ParallelPlan.Build(s.Job, names).Select(t => (t, s, consoleSource)));
         }
 
         var first = parts.Count;
         for (var i = 0; i < tasks.Count; i++)
-            parts.Add((run.Label + tasks[i].Task.Label, "", Path.Combine(logDir, $"{stamp}-{run.Index:00}-{i:0000}.part")));
+            parts.Add((run.Label + tasks[i].Task.Label, "", Path.Combine(logDir, $"{stamp}-{run.Index:00}-{first + i:0000}.part")));
 
+        // Each process copies as soon as its own part is ready: with versions (or extras deleted first) it
+        // lists its folder with robocopy /L, moves or deletes what that shows, then copies, while the
+        // other processes are still listing or already copying theirs.
+        var listsLeft = needsList ? tasks.Count : 0;
         var combined = 0;
         var total = RobocopySummary.Empty;
         var options = new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, run.RunJob.Options.Processes), CancellationToken = ct };
         await Parallel.ForEachAsync(Enumerable.Range(0, tasks.Count), options, async (i, token) =>
         {
-            var (t, job, consoleSource) = tasks[i];
+            var (t, segment, consoleSource) = tasks[i];
+            var job = segment.Job;
+            if (needsList)
+            {
+                var piece = new Segment(job, t.Source, t.Destination, PieceOf(segment, t));
+                piece.ListFile = await ListAsync(job, t, token);
+                try
+                {
+                    var totals = new PreviewAggregator(t.Source, t.Destination, part.Mode);
+                    foreach (var line in File.Exists(piece.ListFile) ? File.ReadLines(piece.ListFile) : []) totals.Add(line);
+                    lock (versions)
+                    {
+                        rj.TotalFiles += totals.Result.FilesToCopy;
+                        rj.TotalBytes += totals.Result.BytesToCopy;
+                        if (Directory.Exists(t.Destination))
+                        {
+                            if (extrasFirst) DeleteExtras(piece, versions, record, token);
+                            if (part.Options.KeepVersions) ArchiveVersions(piece, run.Dst, versions, startLocal, token);
+                        }
+                        // The last run's lists complete the totals: the bar can show a percentage from here on.
+                        if (--listsLeft == 0 && run.Last) rj.TotalsKnown = true;
+                    }
+                }
+                finally
+                {
+                    piece.DeleteList();
+                }
+            }
+
             var args = RobocopyArgs.Build(job, t.Source, t.Destination, t.Pass, false, parts[first + i].File, true, t.RootExcludedDirs);
             lock (parts) parts[first + i] = parts[first + i] with { Command = "robocopy " + CommandLine.Join(args) };
 
@@ -549,6 +684,12 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
                 if (summary.Summary is { } s) total = total.Add(s);
             }
         });
+
+        if (versions.DeletedCount > extrasBefore)
+            notes.Add(run.Label + Loc.Fl(lang, "run.extrasfirst", Fmt.Count(versions.DeletedCount - extrasBefore, culture)));
+        var archived = versions.Count - archivedBefore;
+        record.VersionsArchived += archived;
+        if (archived > 0) notes.Add(run.Label + Loc.Fl(lang, "run.versions", Fmt.Count(archived, culture), Versions.RunFolder(run.Dst, startLocal)));
 
         record.ExitCode |= combined;
         record.Outcome = Worse(record.Outcome, RobocopyExitCode.Outcome(combined));
@@ -678,13 +819,28 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
         public long DeletedCount { get; set; }
     }
 
-    /// <summary>Runs robocopy /L over the whole job into a temporary list file and returns its path.</summary>
-    private static async Task<string> ListAsync(CopyJob runJob, string src, string dst, CancellationToken ct)
+    /// <summary>Runs robocopy /L over one process's part into a temporary list file and returns its path.</summary>
+    private static async Task<string> ListAsync(CopyJob job, RobocopyTask t, CancellationToken ct)
     {
         var listFile = Path.Combine(AppPaths.TempDir, $"list-{Guid.NewGuid():N}.log");
-        var args = RobocopyArgs.Build(runJob, src, dst, RobocopyPass.Full, true, listFile, false);
+        var args = RobocopyArgs.Build(job, t.Source, t.Destination, t.Pass, true, listFile, false, t.RootExcludedDirs);
         await RobocopyProcess.RunAsync(args, null, ct);
         return listFile;
+    }
+
+    /// <summary>
+    /// Only versions and extras deleted first need to know beforehand what robocopy will overwrite or
+    /// delete; any other run starts copying at once and learns its totals as it goes.
+    /// </summary>
+    private static bool NeedsList(CopyJob part) =>
+        part.Options.KeepVersions || (part.Mode == CopyMode.Mirror && part.Options.DeleteExtrasFirst);
+
+    /// <summary>Where a process's part sits in the versions folder: the segment's place, then its top-level folder.</summary>
+    private static string PieceOf(Segment s, RobocopyTask t)
+    {
+        if (t.Pass != RobocopyPass.Folder) return s.Prefix;
+        var name = PathUtil.LastName(t.Source);
+        return s.Prefix.Length == 0 ? name : s.Prefix + "\\" + name;
     }
 
     /// <summary>
