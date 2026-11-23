@@ -171,6 +171,43 @@ Check ((Text "$work\restore-multi\One\a.txt").StartsWith('version 2')) 'first so
 $refused = Call 'restore.start' @{ jobId = $mjob.id; items = @('Two'); target = "$src2\restore" } -AllowError
 Check (-not $refused.ok -and $refused.error -like '*read-only*') 'restore into the second source refused'
 
+Step 'Two destinations; extras deleted before the copy'
+$destA = "$work\destA"
+$destB = "$work\destB"
+$djob = Call 'jobs.save' @{
+    name = 'e2e-destinations'
+    source = @{ path = $src2 }
+    destination = @{ path = $destA }
+    extraDestinations = @(@{ path = $destB })
+    mode = 'Mirror'
+    deletionConfirmed = $true
+    options = @{ deleteExtrasFirst = $true; autoTune = $true }
+}
+$run = RunJob $djob.id
+Check ($run.outcome -eq 'Success') "outcome $($run.outcome): $($run.message)"
+Check ((Text "$destA\deep\c.txt") -like 'second source*') 'copied into the first destination'
+Check ((Text "$destB\deep\c.txt") -like 'second source*') 'copied into the second destination'
+[System.IO.File]::WriteAllText("$destB\stale.txt", 'only in the destination')
+New-Item -ItemType Directory -Force "$destB\stale-dir" | Out-Null
+[System.IO.File]::WriteAllText("$destB\stale-dir\x.txt", 'x')
+$run = RunJob $djob.id
+Check ($run.outcome -eq 'Success') "second run: $($run.outcome): $($run.message)"
+Check (-not (Test-Path "$destB\stale.txt") -and -not (Test-Path "$destB\stale-dir")) 'extras of the second destination deleted'
+Check ($run.filesExtra -ge 2) "extras counted: $($run.filesExtra) files, $($run.dirsExtra) folders"
+Check ((Text "$destB\deep\c.txt") -like 'second source*') 'second destination still complete'
+$bad = Call 'jobs.save' @{
+    name = 'e2e-nested-destinations'
+    source = @{ path = $src2 }
+    destination = @{ path = $destA }
+    extraDestinations = @(@{ path = "$destA\inner" })
+} -AllowError
+Check (-not $bad.ok -and $bad.error -like '*overlap*') 'nested destinations refused'
+$points = Call 'restore.points' @{ id = $djob.id; destination = 1 }
+Check ($points.Count -ge 1) "restore points of the second destination: $($points.Count)"
+$op = Call 'restore.start' @{ jobId = $djob.id; destination = 1; items = @('deep'); target = "$work\restore-destB"; overwrite = $false }
+WaitFor { -not (Call 'restore.status' @{ id = $op.id }).running } 300 'the restore' | Out-Null
+Check ((Text "$work\restore-destB\deep\c.txt") -like 'second source*') 'restored from the second destination'
+
 Step 'Junctions on a share are followed, a loop is not'
 $shareDir = "$work\share"
 $outside = "$work\outside"
@@ -202,6 +239,13 @@ finally {
     Remove-SmbShare -Name 'agse2e' -Force -ErrorAction SilentlyContinue
 }
 
+Step 'The configuration window shows every page and window'
+$selftestLog = "$work\selftest.log"
+$gui = Start-Process "$env:ProgramFiles\AGS-Copy\AGS-Copy.exe" -ArgumentList "--selftest `"$selftestLog`"" -PassThru
+if (-not $gui.WaitForExit(300000)) { $gui.Kill(); Check $false 'GUI self-test finished in time' }
+$guiLog = if (Test-Path $selftestLog) { (Get-Content $selftestLog) -join "`n    " } else { '(no log)' }
+Check ($gui.ExitCode -eq 0) "GUI self-test exit code $($gui.ExitCode):`n    $guiLog"
+
 Step 'The source was never written'
 Check (-not (Test-Path "$src2\restore")) 'nothing created in the second source'
 Check ((Get-Item "$shareDir\loop").LinkType -eq 'Junction' -and (Get-Item "$shareDir\linked").LinkType -eq 'Junction') 'junctions in the share untouched'
@@ -212,6 +256,38 @@ Step 'Watchdog restarts a stopped service'
 Stop-Service 'AGS-Copy' -Force
 WaitFor { (Get-Service 'AGS-Copy').Status -eq 'Running' } 240 'the watchdog to restart AGS-Copy' | Out-Null
 Check ((Get-Service 'AGS-Copy').Status -eq 'Running') 'AGS-Copy running again'
+
+Step 'A job cut short by a crash of the service runs again'
+$slow = "$work\slow"
+$slowCopy = "$work\slowcopy"
+New-Item -ItemType Directory -Force $slow | Out-Null
+foreach ($d in 1..60) {
+    New-Item -ItemType Directory -Force "$slow\d$d" | Out-Null
+    foreach ($f in 1..500) { [System.IO.File]::WriteAllText("$slow\d$d\f$f.txt", "file $d/$f") }
+}
+WaitFor { Call 'status' } 120 'the service pipe' | Out-Null
+$cjob = Call 'jobs.save' @{
+    name = 'e2e-crash'
+    source = @{ path = $slow }
+    destination = @{ path = $slowCopy }
+    options = @{ useShadowCopy = $true; autoTune = $false; threads = 2; processes = 1 }
+}
+Call 'jobs.run' @{ id = $cjob.id } | Out-Null
+WaitFor { (JobStatus $cjob.id).running } 60 'the job to start' | Out-Null
+Start-Sleep -Seconds 1
+$svcPid = (Get-CimInstance Win32_Service -Filter "Name='AGS-Copy'").ProcessId
+Stop-Process -Id $svcPid -Force
+Start-Sleep -Seconds 3
+$orphans = @(Get-CimInstance Win32_Process -Filter "Name='robocopy.exe'" | Where-Object { $_.CommandLine -like '*slowcopy*' })
+Check ($orphans.Count -eq 0) "robocopy ended with the service ($($orphans.Count) left)"
+WaitFor { @(Call 'history.list' @{ id = $cjob.id } | Where-Object { $_.trigger -eq 'Resumed' }).Count -gt 0 } 420 'the watchdog to resume the job' | Out-Null
+WaitFor { -not (JobStatus $cjob.id).running } 600 'the resumed run to finish' | Out-Null
+$runs = @(Call 'history.list' @{ id = $cjob.id })
+$resumed = $runs | Where-Object { $_.trigger -eq 'Resumed' } | Select-Object -First 1
+$cut = $runs | Where-Object { $_.trigger -eq 'Manual' } | Select-Object -First 1
+Check ($resumed.outcome -eq 'Success') "resumed run: $($resumed.outcome): $($resumed.message)"
+Check ($cut.outcome -eq 'Failed' -and $cut.message -like '*watchdog*') "interrupted run recorded: $($cut.message)"
+Check ((Get-ChildItem $slowCopy -Recurse -File).Count -eq 30000) 'every file copied by the resumed run'
 
 Step 'Uninstall'
 $p = Start-Process msiexec.exe -ArgumentList "/x `"$((Resolve-Path $Msi).Path)`" /qn" -Wait -PassThru

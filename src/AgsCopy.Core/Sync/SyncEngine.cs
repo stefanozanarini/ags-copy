@@ -15,6 +15,9 @@ public sealed class SyncSettings
     public int Threads { get; init; } = 4;
     public int Retries { get; init; } = 2;
     public int RetryWaitSeconds { get; init; } = 5;
+
+    /// <summary>Mirror: extras are deleted before the copies, to make room on a full destination.</summary>
+    public bool ExtrasFirst { get; init; }
 }
 
 public sealed class SyncResult
@@ -79,6 +82,11 @@ public static class SyncEngine
         var archived = new ConcurrentQueue<VersionMove>();
         long copied = 0, bytes = 0, compressed = 0, failed = 0, archivedCount = 0;
 
+        var archiveDirs = new ConcurrentDictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+
+        // On a full destination the extras go first; otherwise after, so a failed copy never costs the old copy.
+        if (settings.ExtrasFirst) HandleExtras();
+
         using (var target = openTarget())
         {
             if (!plan.DestinationExists) target.CreateDirectory("");
@@ -99,7 +107,6 @@ public static class SyncEngine
         // Copies, in parallel, one connection pair per worker.
         var queue = new ConcurrentQueue<SyncCopy>(plan.Copies.OrderByDescending(c => c.Source.Size));
         var workers = Math.Clamp(settings.Threads, 1, Math.Max(1, plan.Copies.Count));
-        var archiveDirs = new ConcurrentDictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         await Task.WhenAll(Enumerable.Range(0, workers).Select(_ => Task.Run(() =>
         {
             using var source = openSource();
@@ -144,35 +151,7 @@ public static class SyncEngine
             }
         }, ct))).ConfigureAwait(false);
 
-        // Extras, after the copies: a failed copy never costs the old copy.
-        using (var target = openTarget())
-        {
-            foreach (var x in plan.Extras)
-            {
-                if (x.Entry.IsDirectory) result.DirsExtra++;
-                result.FilesExtra += x.Files;
-                if (settings.Mode != CopyMode.Mirror) continue;
-                ct.ThrowIfCancellationRequested();
-                try
-                {
-                    if (settings.KeepVersions)
-                    {
-                        Archive(target, x.Entry.Relative, VersionReason.Deleted, x.Entry.IsDirectory);
-                    }
-                    else
-                    {
-                        target.Delete(x.Entry.Relative, x.Entry.IsDirectory);
-                        result.DeletedCount++;
-                        if (result.Deleted.Count < RunReport.MaxListedItems) result.Deleted.Add(target.Display(x.Entry.Relative));
-                        log($"*EXTRA {(x.Entry.IsDirectory ? "Dir" : "File")}\t{x.Bytes}\t{target.Display(x.Entry.Relative)}\tdeleted");
-                    }
-                }
-                catch (Exception e) when (IsIo(e))
-                {
-                    errors.Enqueue(new CopyError(target.Display(x.Entry.Relative), Code(e), "Deleting Extra", e.Message));
-                }
-            }
-        }
+        if (!settings.ExtrasFirst) HandleExtras();
 
         result.FilesCopied = copied;
         result.BytesCopied = bytes;
@@ -184,6 +163,38 @@ public static class SyncEngine
         result.Errors.AddRange(errors.Take(ErrorCollector.MaxErrors));
         if (archivedCount > 0) result.VersionsFolder = versionsRoot;
         return result;
+
+        void HandleExtras()
+        {
+            using (var target = openTarget())
+            {
+                foreach (var x in plan.Extras)
+                {
+                    if (x.Entry.IsDirectory) result.DirsExtra++;
+                    result.FilesExtra += x.Files;
+                    if (settings.Mode != CopyMode.Mirror) continue;
+                    ct.ThrowIfCancellationRequested();
+                    try
+                    {
+                        if (settings.KeepVersions)
+                        {
+                            Archive(target, x.Entry.Relative, VersionReason.Deleted, x.Entry.IsDirectory);
+                        }
+                        else
+                        {
+                            target.Delete(x.Entry.Relative, x.Entry.IsDirectory);
+                            result.DeletedCount++;
+                            if (result.Deleted.Count < RunReport.MaxListedItems) result.Deleted.Add(target.Display(x.Entry.Relative));
+                            log($"*EXTRA {(x.Entry.IsDirectory ? "Dir" : "File")}\t{x.Bytes}\t{target.Display(x.Entry.Relative)}\tdeleted");
+                        }
+                    }
+                    catch (Exception e) when (IsIo(e))
+                    {
+                        errors.Enqueue(new CopyError(target.Display(x.Entry.Relative), Code(e), "Deleting Extra", e.Message));
+                    }
+                }
+            }
+        }
 
         bool Archive(ITargetStore target, string relative, VersionReason reason, bool isDirectory)
         {

@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:l="clr-namespace:AgsCopy.App"
         Style="{StaticResource AppWindow}"
-        Title="AGS-Copy" Width="1150" Height="640" MinWidth="820" MinHeight="420"
+        Title="AGS-Copy" Width="1280" Height="780" MinWidth="980" MinHeight="560"
         WindowStartupLocation="CenterScreen">
     <DockPanel>
         <!-- Header -->
@@ -48,7 +48,6 @@
         <Border DockPanel.Dock="Top" Background="{StaticResource Surface}" BorderBrush="{StaticResource Border}" BorderThickness="0,0,0,1" Padding="12,8">
             <WrapPanel>
                 <Button x:Name="NewButton" Content="{l:T main.new}" Style="{StaticResource PrimaryButton}" Click="New_Click" />
-                <Button x:Name="EditButton" Content="{l:T main.edit}" Click="Edit_Click" />
                 <Button x:Name="DuplicateButton" Content="{l:T main.duplicate}" Click="Duplicate_Click" />
                 <Button x:Name="DeleteButton" Content="{l:T main.delete}" Click="Delete_Click" />
                 <Separator Margin="6,0,12,0" />
@@ -68,93 +67,71 @@
         </Border>
 
         <Grid>
-            <DataGrid x:Name="JobsGrid" AutoGenerateColumns="False" IsReadOnly="True" SelectionMode="Single"
-                      HeadersVisibility="Column" GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="#EEF0F3"
-                      BorderThickness="0" RowHeight="34" CanUserAddRows="False" Background="White"
-                      SelectionChanged="Jobs_SelectionChanged" MouseDoubleClick="Jobs_DoubleClick">
-                <DataGrid.CellStyle>
-                    <Style TargetType="DataGridCell">
-                        <Setter Property="BorderThickness" Value="0" />
-                        <Setter Property="VerticalContentAlignment" Value="Center" />
-                        <Setter Property="Padding" Value="6,0" />
-                        <Setter Property="Template">
-                            <Setter.Value>
-                                <ControlTemplate TargetType="DataGridCell">
-                                    <Border Padding="{TemplateBinding Padding}" Background="{TemplateBinding Background}">
-                                        <ContentPresenter VerticalAlignment="Center" />
-                                    </Border>
-                                </ControlTemplate>
-                            </Setter.Value>
-                        </Setter>
-                        <Style.Triggers>
-                            <Trigger Property="IsSelected" Value="True">
-                                <Setter Property="Background" Value="{StaticResource Selection}" />
-                                <Setter Property="Foreground" Value="Black" />
-                            </Trigger>
-                        </Style.Triggers>
-                    </Style>
-                </DataGrid.CellStyle>
-                <DataGrid.Columns>
-                    <DataGridTemplateColumn Width="28">
-                        <DataGridTemplateColumn.CellTemplate>
-                            <DataTemplate>
-                                <Ellipse Width="11" Height="11" x:Name="Dot" Fill="#B0B7C0" ToolTip="{Binding StateText}" />
-                                <DataTemplate.Triggers>
-                                    <DataTrigger Binding="{Binding StateKey}" Value="Running">
-                                        <Setter TargetName="Dot" Property="Fill" Value="#1F6FB2" />
-                                    </DataTrigger>
-                                    <DataTrigger Binding="{Binding StateKey}" Value="Success">
-                                        <Setter TargetName="Dot" Property="Fill" Value="#2E7D32" />
-                                    </DataTrigger>
-                                    <DataTrigger Binding="{Binding StateKey}" Value="Warning">
-                                        <Setter TargetName="Dot" Property="Fill" Value="#E08A00" />
-                                    </DataTrigger>
-                                    <DataTrigger Binding="{Binding StateKey}" Value="Failed">
-                                        <Setter TargetName="Dot" Property="Fill" Value="#C62828" />
-                                    </DataTrigger>
-                                    <DataTrigger Binding="{Binding StateKey}" Value="Cancelled">
-                                        <Setter TargetName="Dot" Property="Fill" Value="#E08A00" />
-                                    </DataTrigger>
-                                </DataTemplate.Triggers>
-                            </DataTemplate>
-                        </DataGridTemplateColumn.CellTemplate>
-                    </DataGridTemplateColumn>
-                    <DataGridTextColumn Header="{l:T col.name}" Binding="{Binding Name}" Width="170" FontWeight="SemiBold" />
-                    <DataGridTemplateColumn Header="{l:T col.mode}" Width="120">
-                        <DataGridTemplateColumn.CellTemplate>
-                            <DataTemplate>
-                                <TextBlock x:Name="Mode" Text="{Binding ModeText}" />
-                                <DataTemplate.Triggers>
-                                    <DataTrigger Binding="{Binding DeletesFiles}" Value="True">
-                                        <Setter TargetName="Mode" Property="Foreground" Value="#C62828" />
-                                    </DataTrigger>
-                                </DataTemplate.Triggers>
-                            </DataTemplate>
-                        </DataGridTemplateColumn.CellTemplate>
-                    </DataGridTemplateColumn>
-                    <DataGridTextColumn Header="{l:T col.source}" Binding="{Binding Source}" Width="*" />
-                    <DataGridTextColumn Header="{l:T col.destination}" Binding="{Binding Destination}" Width="*" />
-                    <DataGridTextColumn Header="{l:T col.schedule}" Binding="{Binding ScheduleText}" Width="170" />
-                    <DataGridTextColumn Header="{l:T col.next}" Binding="{Binding NextRunText}" Width="120" />
-                    <DataGridTemplateColumn Header="{l:T col.state}" Width="280">
-                        <DataGridTemplateColumn.CellTemplate>
-                            <DataTemplate>
-                                <StackPanel VerticalAlignment="Center">
-                                    <TextBlock Text="{Binding StateText}" TextTrimming="CharacterEllipsis" ToolTip="{Binding StateText}" />
-                                    <ProgressBar Height="5" Margin="0,2,0,0" Minimum="0" Maximum="100" Value="{Binding Percent, Mode=OneWay}"
-                                                 IsIndeterminate="{Binding Indeterminate, Mode=OneWay}" Foreground="{StaticResource Brand}"
-                                                 Background="{StaticResource Selection}" BorderThickness="0"
-                                                 Visibility="{Binding Running, Converter={StaticResource BoolToVis}}" />
-                                </StackPanel>
-                            </DataTemplate>
-                        </DataGridTemplateColumn.CellTemplate>
-                    </DataGridTemplateColumn>
-                </DataGrid.Columns>
-            </DataGrid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="300" MinWidth="220" />
+                <ColumnDefinition Width="5" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
 
-            <StackPanel x:Name="EmptyState" HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Collapsed">
-                <TextBlock Text="{l:T main.empty.title}" FontSize="18" FontWeight="SemiBold" HorizontalAlignment="Center" />
-                <TextBlock Text="{l:T main.empty.text}" Style="{StaticResource Hint}" HorizontalAlignment="Center" TextAlignment="Center" MaxWidth="420" />
+            <!-- Jobs, each with its pages, like the backup sets of Uranium -->
+            <TreeView x:Name="JobTree" BorderThickness="0" Background="{StaticResource Surface}" Padding="4,6"
+                      SelectedItemChanged="JobTree_SelectedItemChanged">
+                <TreeView.Resources>
+                    <!-- Jobs and pages alike: selection and expansion follow the nodes. -->
+                    <Style TargetType="TreeViewItem">
+                        <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}" />
+                        <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
+                        <Setter Property="Padding" Value="2,3" />
+                    </Style>
+                    <HierarchicalDataTemplate DataType="{x:Type l:JobRow}" ItemsSource="{Binding Pages}">
+                        <Grid Width="240" Margin="0,2">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="18" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Ellipse x:Name="Dot" Width="10" Height="10" Fill="#B0B7C0" VerticalAlignment="Top" Margin="0,5,0,0" ToolTip="{Binding StateText}" />
+                            <StackPanel Grid.Column="1">
+                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Text="{Binding StateText}" Foreground="{StaticResource Muted}" FontSize="11" TextTrimming="CharacterEllipsis" ToolTip="{Binding StateText}" />
+                                <TextBlock Text="{Binding NextRunLine}" Foreground="{StaticResource Muted}" FontSize="11" TextTrimming="CharacterEllipsis" />
+                                <ProgressBar Height="4" Margin="0,2,0,0" Minimum="0" Maximum="100" Value="{Binding Percent, Mode=OneWay}"
+                                             IsIndeterminate="{Binding Indeterminate, Mode=OneWay}" Foreground="{StaticResource Brand}"
+                                             Background="{StaticResource Selection}" BorderThickness="0"
+                                             Visibility="{Binding Running, Converter={StaticResource BoolToVis}}" />
+                            </StackPanel>
+                        </Grid>
+                        <HierarchicalDataTemplate.Triggers>
+                            <DataTrigger Binding="{Binding StateKey}" Value="Running">
+                                <Setter TargetName="Dot" Property="Fill" Value="#1F6FB2" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding StateKey}" Value="Success">
+                                <Setter TargetName="Dot" Property="Fill" Value="#2E7D32" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding StateKey}" Value="Warning">
+                                <Setter TargetName="Dot" Property="Fill" Value="#E08A00" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding StateKey}" Value="Failed">
+                                <Setter TargetName="Dot" Property="Fill" Value="#C62828" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding StateKey}" Value="Cancelled">
+                                <Setter TargetName="Dot" Property="Fill" Value="#E08A00" />
+                            </DataTrigger>
+                        </HierarchicalDataTemplate.Triggers>
+                    </HierarchicalDataTemplate>
+                    <DataTemplate DataType="{x:Type l:PageNode}">
+                        <TextBlock Text="{Binding Title}" Margin="2,1" />
+                    </DataTemplate>
+                </TreeView.Resources>
+            </TreeView>
+
+            <GridSplitter Grid.Column="1" HorizontalAlignment="Stretch" Background="{StaticResource Border}" />
+
+            <!-- The selected job, or a new one -->
+            <ContentControl x:Name="EditorHost" Grid.Column="2" />
+
+            <StackPanel x:Name="EmptyState" Grid.Column="2" HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Collapsed">
+                <TextBlock x:Name="EmptyTitle" Text="{l:T main.empty.title}" FontSize="18" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                <TextBlock x:Name="EmptyText" Text="{l:T main.empty.text}" Style="{StaticResource Hint}" HorizontalAlignment="Center" TextAlignment="Center" MaxWidth="420" />
                 <Button Content="{l:T main.new}" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Center" Click="New_Click" />
             </StackPanel>
         </Grid>

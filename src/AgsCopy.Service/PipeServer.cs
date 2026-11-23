@@ -185,7 +185,7 @@ public sealed class PipeServer(
             }
 
             case Commands.RestorePoints:
-                return await Task.Run(() => restore.Points(P<IdRequest>().Id, lang), ct);
+                return await Task.Run(() => restore.Points(P<RestorePointsRequest>(), lang), ct);
 
             case Commands.RestoreList:
             {
@@ -198,6 +198,9 @@ public sealed class PipeServer(
 
             case Commands.RestoreStatus:
                 return restore.Status(P<IdRequest>().Id, lang);
+
+            case Commands.ResumeJobs:
+                return executor.ResumeInterrupted();
 
             case Commands.RestoreCancel:
                 return restore.Cancel(P<IdRequest>().Id);
@@ -251,7 +254,7 @@ public sealed class PipeServer(
                 Enabled = job.Enabled,
                 Mode = job.Mode,
                 Source = job.SourceSummary,
-                Destination = job.Destination.Path,
+                Destination = job.DestinationSummary,
                 Schedule = job.Schedule,
                 Running = running != null,
                 RunStartedUtc = running?.Record.StartUtc,

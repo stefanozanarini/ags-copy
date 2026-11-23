@@ -16,6 +16,8 @@ public enum RunTrigger
 {
     Manual,
     Scheduled,
+    /// <summary>Run again after a crash of the service cut the previous run short.</summary>
+    Resumed,
 }
 
 public sealed class RunRecord

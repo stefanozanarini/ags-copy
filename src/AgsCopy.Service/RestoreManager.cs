@@ -46,12 +46,14 @@ public sealed class RestoreManager(JobStore store, ILogger<RestoreManager> log)
         }
     }
 
-    /// <summary>With several sources, one view over the source folders and their versions.</summary>
-    private Backup Open(CopyJob job, string? lang)
+    /// <summary>One destination of the job; with several sources, one view over the source folders and their versions.</summary>
+    private Backup Open(CopyJob job, int destination, string? lang)
     {
-        if (job.Destination.IsSftp) return new Backup(View(job, Sftp.Open(job.Destination, null, lang)), []);
-        var leases = JobExecutor.Connect(new CopyJob { Destination = job.Destination, Source = new JobEndpoint() }, null, lang);
-        return new Backup(View(job, new LocalSource(PathUtil.NormalizeDir(job.Destination.Path))), leases);
+        if (destination < 0 || destination >= job.Destinations.Count) throw new ServiceException(Loc.Tl(lang, "err.restore.unknown"));
+        var d = job.Destinations[destination];
+        if (d.IsSftp) return new Backup(View(job, Sftp.Open(d, null, lang)), []);
+        var leases = JobExecutor.Connect(new CopyJob { Destination = d, Source = new JobEndpoint() }, null, lang);
+        return new Backup(View(job, new LocalSource(PathUtil.NormalizeDir(d.Path))), leases);
     }
 
     private static ISourceStore View(CopyJob job, ISourceStore backup) =>
@@ -61,15 +63,15 @@ public sealed class RestoreManager(JobStore store, ILogger<RestoreManager> log)
 
     private static RestorePoint Point(string? stamp) => stamp == null ? RestorePoint.Current : new RestorePoint(stamp, null);
 
-    public List<RestorePoint> Points(Guid jobId, string? lang)
+    public List<RestorePoint> Points(RestorePointsRequest req, string? lang)
     {
-        using var backup = Open(Job(jobId, lang), lang);
+        using var backup = Open(Job(req.Id, lang), req.Destination, lang);
         return new RestoreBrowser(backup.Store).Points();
     }
 
     public List<RestoreItem> List(RestoreListRequest req, string? lang)
     {
-        using var backup = Open(Job(req.JobId, lang), lang);
+        using var backup = Open(Job(req.JobId, lang), req.Destination, lang);
         return new RestoreBrowser(backup.Store).List(Point(req.Stamp), req.Relative.Replace('\\', '/').Trim('/'));
     }
 
@@ -95,7 +97,7 @@ public sealed class RestoreManager(JobStore store, ILogger<RestoreManager> log)
             Directory.CreateDirectory(Path.GetDirectoryName(logFile)!);
             using var writer = new StreamWriter(logFile, false, new UTF8Encoding(true));
             writer.WriteLine($"AGS-Copy restore — {job.Name} — {(req.Stamp ?? "current")} → {op.Target}");
-            using var backup = Open(job, lang);
+            using var backup = Open(job, req.Destination, lang);
             var browser = new RestoreBrowser(backup.Store);
             var items = browser.Expand(Point(req.Stamp), req.Items, ct).ToList();
             op.TotalFiles = items.Count(i => !i.IsDirectory);
@@ -168,7 +170,8 @@ public sealed class RestoreManager(JobStore store, ILogger<RestoreManager> log)
         var t = PathUtil.NormalizeDir(target);
         foreach (var source in job.Sources.Where(s => !s.IsSftp))
             if (Overlap(t, source.Path, resolve)) throw new ServiceException(Loc.Fl(lang, "err.restore.source", source.Path));
-        if (!job.Destination.IsSftp && Overlap(t, job.Destination.Path, resolve)) throw new ServiceException(Loc.Fl(lang, "err.restore.backup", job.Destination.Path));
+        foreach (var d in job.Destinations.Where(d => !d.IsSftp))
+            if (Overlap(t, d.Path, resolve)) throw new ServiceException(Loc.Fl(lang, "err.restore.backup", d.Path));
         return t;
     }
 

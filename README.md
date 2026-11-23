@@ -6,10 +6,22 @@ Scheduled copies and backups for Windows. Local folders and Windows shares are c
 **robocopy**, wherever it can do the job. **SFTP** servers work too, as source or destination,
 through AGS-Copy's own copy engine. The interface is in Italian (default) and English.
 
-- **Guided job editor** in seven steps: general, source, destination, mode, options, schedule,
-  summary. A job is saved only from the **summary** step. That step describes in plain words
-  what is copied, where, and what is deleted. It also runs a **simulation** (`robocopy /L`) that
-  lists the files to copy and the files and folders to delete.
+- **One window, laid out like Uranium Backup.** The jobs are on the left, as a tree. Each job shows
+  its state, the next run and a progress bar, and opens into four pages:
+  - *Sources and destinations*: the job's name, then the list of sources above and the list of
+    destinations below. Each is added or edited in its own window: path, account, *Check access*
+    and a look at the folder.
+  - *Mode and options*.
+  - *Schedule*.
+  - *Summary*: describes in plain words what is copied, where, and what is deleted, and runs a
+    **simulation** (`robocopy /L`) that lists the files to copy and the files and folders to delete.
+
+  Changes are saved only from the summary page. Leaving a job with unsaved changes asks first.
+- **Several destinations per job**: each run copies every source into each destination, one
+  after the other, a NAS and a USB disk for example. The sources' shadow copies and DFS or
+  junction lookups are done once for all of them. Destinations inside each other, or overlapping
+  a source, are refused. Each destination keeps its own versions, and a restore asks which one to
+  read.
 - **Several sources per job**, each copied into a folder of its own inside the destination
   (`E:\Backup\Data`, `E:\Backup\Mail`, …), so they never mix and a mirror of one never
   deletes the files of another. The folder defaults to the source's own name and can be
@@ -37,8 +49,9 @@ through AGS-Copy's own copy engine. The interface is in Italian (default) and En
   junction as a source of its own, as it does for DFS links. Symbolic links stay excluded. The
   walk adds a pass over the share's folders to each run. Without `/XJ`, robocopy and the engine
   follow everything themselves.
-- **Layout preview**: when you leave the destination step (or with *Preview the layout*), a
-  window shows the source folder next to how the destination will look after the copy, folder by
+- **Layout preview**: when a job has one source and one destination, adding them (or *Preview the
+  layout*, for the selected source and destination) opens a window. It shows the source folder
+  next to how the destination will look after the copy, folder by
   folder, with what is new, updated, kept, deleted or excluded. Robocopy copies the *content* of
   the source, so `C:\Data` → `E:\Backup` puts the files in `E:\Backup`, not `E:\Backup\Data`.
   The window says so, and warns when the destination already holds a folder named like the
@@ -62,8 +75,12 @@ through AGS-Copy's own copy engine. The interface is in Italian (default) and En
   would overwrite or (in Mirror) delete are moved to
   `Destination\_AGS-Copy-Versions\<yyyy-MM-dd_HHmmss>\`, keeping their relative path.
   - A `robocopy /L` pass decides what to move.
-  - Version folders older than the retention (days, 0 = forever) are deleted after each run.
+  - Version folders older than the retention (days, 0 = forever) are deleted when each run
+    starts, before anything is copied, so they make room first.
   - The versions folder is always excluded from robocopy, so a mirror never purges it.
+- **Full destination** (option, Mirror without versions): the extras, which a mirror deletes
+  anyway, are deleted before the copy instead of after it, so the new files have room. The
+  `robocopy /L` pass tells what they are; the report lists them as usual.
 - **Restore** (*Restore…* in the main window):
   - Choose a moment: now, or "before the backup of …" for each run that kept versions. The
     backup is rebuilt as it was then: each item comes from the earliest versions folder from
@@ -107,6 +124,10 @@ through AGS-Copy's own copy engine. The interface is in Italian (default) and En
   with `WNetAddConnection2` and needs no mapped drive. Passwords are encrypted with DPAPI and
   bound to the service account: they never leave the service, and the GUI only learns that one
   is stored.
+  Each source has its own account. Windows allows one user per server in a session, so a job that
+  would reach two shares of the same server, or a source and the destination, with different
+  users is refused when saved (it would fail with error 1219). The server's name and its IP
+  address count as two servers.
 - **Speed**:
   - *Automatic* (default): when a run starts the service measures free CPUs, CPU load
     and available RAM. From those it picks processes and threads (`AutoTune`): several threads
@@ -127,6 +148,14 @@ through AGS-Copy's own copy engine. The interface is in Italian (default) and En
   is running but has not answered on its pipe for three checks in a row (or is stuck starting
   or stopping). It does nothing while a Windows Installer setup runs or when `AGS-Copy` is set to
   *Disabled*. To stop AGS-Copy on purpose, stop the watchdog first.
+
+  It also brings back the jobs a crash cut short. A run still marked as running when the service
+  starts was interrupted by a crash or a kill; a clean stop cancels its runs first. The history
+  says so, and at its next check the watchdog asks the service to run those jobs again (trigger
+  *Resumed after a crash*). A job interrupted more than twice in a row is not started again, so a
+  job that brings the service down cannot keep it in a loop; it waits for its schedule or a
+  manual run. Robocopy runs inside a Windows job object that ends with the service, so a crash
+  never leaves a robocopy copying on its own next to the resumed run.
 - **Updates**: at every start, the configuration window and the tray icon ask GitHub for the
   latest release. When it is newer, the window shows a banner and the tray a notification and a
   menu entry. *Update now* downloads the `.msi`, runs it (Windows asks for an administrator) and
@@ -150,7 +179,7 @@ AGS-Copy.exe --run <job id>   ──┘   JSON lines, one request per connection
 | `src/AgsCopy.Core` | Job model, robocopy command builder, output parsers, preview, parallel plan, scheduling, DPAPI and network shares, pipe protocol, copy engine (`Sync/`), texts (`Loc.Strings.cs`) |
 | `src/AgsCopy.Service` | Worker service: job store, history, executor, scheduler, pipe server, SFTP (SSH.NET), NTFS compression |
 | `src/AgsCopy.Watchdog` | Worker service that starts or restarts `AGS-Copy` when it is down or hung |
-| `src/AgsCopy.App` | WPF GUI: job list, editor, history, tray |
+| `src/AgsCopy.App` | WPF GUI: job tree and editor, endpoint dialogs, history, restore, tray |
 | `tests/AgsCopy.Core.Tests` | xUnit tests of the Core logic (they also run on Linux) |
 
 ### Points worth knowing
@@ -218,7 +247,12 @@ which runs only on Windows: `build\package.ps1 [-Version x.y.z]` gives
     runs the job twice and restores both sources from one restore point;
   - shares a folder over SMB with a junction to another folder and one back to the share itself,
     then checks that the first is copied and the loop is not;
+  - saves a job with two destinations and *delete extras first*, then checks both copies, the
+    extras deleted before the copy, nested destinations refused, and a restore from the second
+    destination;
   - stops the service and waits for the watchdog to restart it;
+  - kills the service during a run, checks that robocopy died with it, and waits for the
+    watchdog to bring the service back and run the job again to the end;
   - uninstalls.
 
   A failed check stops the release.

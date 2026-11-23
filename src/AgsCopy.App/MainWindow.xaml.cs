@@ -21,7 +21,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        JobsGrid.ItemsSource = _rows;
+        JobTree.ItemsSource = _rows;
 
         _loadingLanguage = true;
         LanguageBox.SelectedIndex = Loc.Language == "en" ? 1 : 0;
@@ -35,6 +35,10 @@ public partial class MainWindow : Window
             ShowUpdate(await Updater.CheckAsync());
         };
         Closed += (_, _) => _timer.Stop();
+        Closing += (_, e) =>
+        {
+            if (!Replaced && _editor is { IsDirty: true } && !Ui.Confirm(this, Loc.T("editor.unsaved.close"))) e.Cancel = true;
+        };
         if (AppPaths.Portable)
         {
             Title = HeaderTitle.Text = "AGS-Copy Portable";
@@ -50,7 +54,17 @@ public partial class MainWindow : Window
     /// <summary>True when a fresh window takes this one's place (language change): nothing ends.</summary>
     public bool Replaced { get; set; }
 
-    private JobRow? Selected => JobsGrid.SelectedItem as JobRow;
+    /// <summary>The job selected in the tree (itself or one of its pages).</summary>
+    private JobRow? Selected => JobTree.SelectedItem switch
+    {
+        JobRow r => r,
+        PageNode p => p.Row,
+        _ => null,
+    };
+
+    private JobEditorView? _editor;
+    private object? _shownNode;
+    private bool _reverting;
 
     private async Task RefreshAsync()
     {
@@ -86,7 +100,7 @@ public partial class MainWindow : Window
         foreach (var s in status.Jobs.Where(j => _rows.All(r => r.Id != j.Id)).OrderBy(j => j.Name, StringComparer.CurrentCultureIgnoreCase))
             _rows.Add(new JobRow(s));
 
-        EmptyState.Visibility = _rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        ShowEmptyState();
         PauseButton.IsChecked = status.SchedulerPaused;
         PausedBanner.Visibility = status.SchedulerPaused ? Visibility.Visible : Visibility.Collapsed;
         var running = status.Jobs.Count(j => j.Running);
@@ -99,7 +113,7 @@ public partial class MainWindow : Window
     {
         var sel = Selected;
         NewButton.IsEnabled = _online;
-        EditButton.IsEnabled = DuplicateButton.IsEnabled = _online && sel != null;
+        DuplicateButton.IsEnabled = _online && sel != null;
         DeleteButton.IsEnabled = _online && sel is { Running: false };
         RunButton.IsEnabled = _online && sel is { Running: false };
         StopButton.IsEnabled = _online && sel is { Running: true };
@@ -107,25 +121,162 @@ public partial class MainWindow : Window
         PauseButton.IsEnabled = ReportButton.IsEnabled = _online;
     }
 
-    private void Jobs_SelectionChanged(object sender, SelectionChangedEventArgs e) => UpdateButtons();
-
-    private void Jobs_DoubleClick(object sender, MouseButtonEventArgs e)
+    private void ShowEmptyState()
     {
-        if (Selected != null) Edit_Click(sender, e);
+        EmptyState.Visibility = _editor == null ? Visibility.Visible : Visibility.Collapsed;
+        EmptyTitle.Text = Loc.T(_rows.Count == 0 ? "main.empty.title" : "main.select.title");
+        EmptyText.Text = Loc.T(_rows.Count == 0 ? "main.empty.text" : "main.select.text");
     }
 
-    private async void New_Click(object sender, RoutedEventArgs e)
+    /// <summary>Unsaved changes in the editor are lost only when the user says so.</summary>
+    private bool LeaveEditor() => _editor is not { IsDirty: true } || Ui.Confirm(this, Loc.T("editor.unsaved.leave"));
+
+    private async void JobTree_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
     {
-        var job = new CopyJob { Name = Loc.T("editor.newname") };
-        if (new JobEditorWindow(job, isNew: true) { Owner = this }.ShowDialog() == true) await RefreshAsync();
+        UpdateButtons();
+        if (_reverting || e.NewValue == null) return;
+        var row = e.NewValue as JobRow ?? (e.NewValue as PageNode)?.Row;
+        var page = (e.NewValue as PageNode)?.Index ?? 0;
+        if (row == null) return;
+
+        if (_editor != null && _editor.JobId == row.Id && !_editor.IsNew)
+        {
+            _editor.Page = page;
+            _shownNode = e.NewValue;
+            return;
+        }
+        if (!LeaveEditor())
+        {
+            // Back to the node of the job being edited.
+            _reverting = true;
+            SetSelected(e.NewValue, false);
+            if (_shownNode != null) SetSelected(_shownNode, true);
+            _reverting = false;
+            return;
+        }
+        row.IsExpanded = true;
+        _shownNode = e.NewValue;
+        try
+        {
+            var job = await PipeClient.CallAsync<CopyJob>(Commands.GetJob, new IdRequest { Id = row.Id });
+            if (job != null) ShowEditor(job, isNew: false, page);
+        }
+        catch (Exception ex)
+        {
+            Ui.Error(this, ex);
+        }
     }
 
-    private async void Edit_Click(object sender, RoutedEventArgs e)
+    private static void SetSelected(object node, bool value)
     {
-        var job = await LoadSelectedAsync();
-        if (job == null) return;
-        if (new JobEditorWindow(job, isNew: false) { Owner = this }.ShowDialog() == true) await RefreshAsync();
+        if (node is JobRow r) r.IsSelected = value;
+        else if (node is PageNode p) p.IsSelected = value;
     }
+
+    private void ShowEditor(CopyJob job, bool isNew, int page = 0)
+    {
+        var editor = new JobEditorView(job, isNew) { Page = page };
+        editor.Saved += async saved =>
+        {
+            await RefreshAsync();
+            // The saved job, at the page it was saved from.
+            var row = _rows.FirstOrDefault(r => r.Id == saved.Id);
+            if (row == null) return;
+            _reverting = true;
+            row.IsExpanded = true;
+            row.Pages[editor.Page].IsSelected = true;
+            _shownNode = row.Pages[editor.Page];
+            _reverting = false;
+            ShowEditor(saved, isNew: false, editor.Page);
+        };
+        editor.Discarded += async () =>
+        {
+            if (editor.IsNew)
+            {
+                CloseEditor();
+                return;
+            }
+            try
+            {
+                var fresh = await PipeClient.CallAsync<CopyJob>(Commands.GetJob, new IdRequest { Id = editor.JobId });
+                if (fresh != null) ShowEditor(fresh, isNew: false, editor.Page);
+            }
+            catch (Exception ex)
+            {
+                Ui.Error(this, ex);
+            }
+        };
+        _editor = editor;
+        EditorHost.Content = editor;
+        ShowEmptyState();
+    }
+
+    private void CloseEditor()
+    {
+        _editor = null;
+        EditorHost.Content = null;
+        _shownNode = null;
+        ShowEmptyState();
+    }
+
+    /// <summary>A new job opens in the right pane, with nothing selected in the tree until it is saved.</summary>
+    private void OpenNew(CopyJob job)
+    {
+        if (!LeaveEditor()) return;
+        _reverting = true;
+        if (JobTree.SelectedItem != null) SetSelected(JobTree.SelectedItem, false);
+        _reverting = false;
+        _shownNode = null;
+        ShowEditor(job, isNew: true);
+    }
+
+    /// <summary>
+    /// For <c>--selftest</c>: shows every page of the first jobs, the endpoint, layout, restore and history
+    /// windows, and a new job. Throws when something does not appear.
+    /// </summary>
+    internal async Task SelfTestAsync(Action<string> log)
+    {
+        await RefreshAsync();
+        if (_rows.Count == 0) throw new InvalidOperationException("No jobs to show.");
+        foreach (var row in _rows.Take(4).ToList())
+        {
+            row.IsExpanded = true;
+            await Task.Delay(300);
+            foreach (var page in row.Pages)
+            {
+                page.IsSelected = true;
+                await Task.Delay(800);
+                if (_editor?.JobId != row.Id || _editor.Page != page.Index)
+                    throw new InvalidOperationException($"{row.Name}: page {page.Title} not shown.");
+                _editor.UpdateLayout();
+            }
+            log($"ok   {row.Name}: {row.Pages.Count} pages");
+        }
+
+        var job = await PipeClient.CallAsync<CopyJob>(Commands.GetJob, new IdRequest { Id = _rows[0].Id }) ?? throw new InvalidOperationException("No job.");
+        foreach (var w in new Window[]
+                 {
+                     new EndpointWindow(new EndpointViewModel(job.Source), job.Id, false, false, true),
+                     new EndpointWindow(new EndpointViewModel(job.Destination), job.Id, true, false, false),
+                     new LayoutPreviewWindow(job.ForSource(0), job.Id),
+                     new RestoreWindow(job.Id, job.Name),
+                     new HistoryWindow(job.Id, job.Name),
+                 })
+        {
+            w.Owner = this;
+            w.Show();
+            await Task.Delay(1500);
+            w.Close();
+            log($"ok   {w.GetType().Name}");
+        }
+
+        New_Click(this, new RoutedEventArgs());
+        await Task.Delay(500);
+        if (_editor is not { IsNew: true }) throw new InvalidOperationException("New job not shown.");
+        log("ok   new job");
+    }
+
+    private void New_Click(object sender, RoutedEventArgs e) => OpenNew(new CopyJob { Name = Loc.T("editor.newname") });
 
     private async void Duplicate_Click(object sender, RoutedEventArgs e)
     {
@@ -134,9 +285,9 @@ public partial class MainWindow : Window
         job.Id = Guid.NewGuid();
         job.Name = Loc.F("editor.copyof", job.Name);
         // Stored passwords belong to the original job: they must be typed again.
-        foreach (var c in job.Sources.Append(job.Destination).Select(e => e.Credential))
+        foreach (var c in job.Sources.Concat(job.Destinations).Select(e => e.Credential))
             if (c != null) c.HasPassword = false;
-        if (new JobEditorWindow(job, isNew: true) { Owner = this }.ShowDialog() == true) await RefreshAsync();
+        OpenNew(job);
     }
 
     private async Task<CopyJob?> LoadSelectedAsync()
@@ -157,6 +308,7 @@ public partial class MainWindow : Window
     {
         if (Selected is not { } row) return;
         if (!Ui.Confirm(this, Loc.F("main.confirmdelete", row.Name))) return;
+        if (_editor?.JobId == row.Id) CloseEditor();
         await CallAsync(Commands.DeleteJob, new IdRequest { Id = row.Id });
     }
 

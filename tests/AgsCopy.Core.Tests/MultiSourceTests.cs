@@ -62,6 +62,77 @@ public class MultiSourceJobTests
         Assert.Contains(JobValidator.Validate(Job((@"D:\A", "A"), (@"F:\B", Versions.FolderName)), "en"), e => e.Contains("reserved"));
     }
 
+    private static JobEndpoint Share(string path, string user, string folder) =>
+        new() { Path = path, Folder = folder, Credential = new StoredCredential { UserName = user, Password = "x" } };
+
+    [Fact]
+    public void Each_source_has_its_own_account_but_one_per_server()
+    {
+        var job = Job((@"D:\Data", "Data"));
+        job.Source = Share(@"\\fs1\accounts", @"CORP\anna", "Accounts");
+        job.ExtraSources = [Share(@"\\fs2\tech", @"CORP\marco", "Tech")];
+        Assert.Empty(JobValidator.Validate(job, "en"));
+
+        // Same server, same user (spelled differently): fine.
+        job.ExtraSources = [Share(@"\\FS1\tech", @"corp\ANNA", "Tech")];
+        Assert.Empty(JobValidator.Validate(job, "en"));
+
+        job.ExtraSources = [Share(@"\\fs1\tech", @"CORP\marco", "Tech")];
+        Assert.Contains(JobValidator.Validate(job, "en"), e => e.Contains("fs1") && e.Contains("1219"));
+
+        // The destination counts too; by IP address the server is another one for Windows.
+        job.ExtraSources = [];
+        job.Destination = Share(@"\\fs1\backup", @"CORP\backup", "");
+        Assert.Contains(JobValidator.Validate(job, "en"), e => e.Contains("1219"));
+        job.Destination = Share(@"\\10.0.0.5\backup", @"CORP\backup", "");
+        Assert.Empty(JobValidator.Validate(job, "en"));
+    }
+
+    [Fact]
+    public void Every_source_goes_to_every_destination()
+    {
+        var job = Job((@"D:\Data", "Data"), (@"F:\Mail", "Mail"));
+        job.ExtraDestinations = [new JobEndpoint { Path = @"\\nas\backup" }];
+        Assert.Empty(JobValidator.Validate(job, "en"));
+        Assert.Equal([(0, 0), (1, 0), (0, 1), (1, 1)], job.Pairs);
+        Assert.Equal(@"\\nas\backup\Mail", job.DestinationFor(1, 1));
+
+        var part = job.ForSource(1, 1);
+        Assert.Equal(@"F:\Mail", part.Source.Path);
+        Assert.Equal(@"\\nas\backup\Mail", part.Destination.Path);
+        Assert.False(part.MultiDestination);
+        Assert.Equal(@"[→ \\nas\backup · Mail] ", job.PairLabel(1, 1));
+        Assert.Equal(@"E:\Backup (+1)", job.DestinationSummary);
+
+        var lines = JobDescriber.Describe(job).Select(l => l.Text).ToList();
+        Assert.Contains(lines, l => l.Contains(@"E:\Backup") && l.Contains(@"\\nas\backup") && l.Contains('2'));
+        Assert.Contains(lines, l => l.Contains(@"F:\Mail") && l.Contains(@"\\nas\backup\Mail"));
+    }
+
+    [Fact]
+    public void Destinations_must_not_overlap_each_other_or_a_source()
+    {
+        var job = Job((@"D:\Data", "Data"));
+        job.ExtraDestinations = [new JobEndpoint { Path = @"E:\Backup\Second" }];
+        Assert.Contains(JobValidator.Validate(job, "en"), e => e.Contains("destinations") && e.Contains("overlap"));
+
+        job.ExtraDestinations = [new JobEndpoint { Path = @"D:\Data\Copy" }];
+        Assert.Contains(JobValidator.Validate(job, "en"), e => e.Contains(@"D:\Data\Copy") && e.Contains("inside each other"));
+
+        job.ExtraDestinations = [new JobEndpoint { Path = "backup" }];
+        Assert.Contains(JobValidator.Validate(job, "en"), e => e.StartsWith("Destination 2"));
+    }
+
+    [Fact]
+    public void Jobs_saved_before_keep_one_destination()
+    {
+        const string old = """{"name":"old","source":{"path":"D:\\Data"},"destination":{"path":"E:\\B"},"mode":"Copy"}""";
+        var job = JsonSerializer.Deserialize<CopyJob>(old, Json.Options)!;
+        Assert.Single(job.Destinations);
+        Assert.Equal(@"E:\B", job.DestinationSummary);
+        Assert.False(job.Options.DeleteExtrasFirst);
+    }
+
     [Fact]
     public void No_source_may_contain_the_destination()
     {
@@ -294,6 +365,28 @@ public sealed class MultiSourceEngineTests : IDisposable
     }
 
     [Fact]
+    public async Task A_full_destination_gets_room_before_the_copy()
+    {
+        Write("src/new.bin", new string('n', 3000));
+        Write("dst/old.bin", new string('o', 3000));
+        var log = new List<string>();
+        var ex = new Exclusions(new CopyJob());
+        using (var s = new LocalSource(P("src")))
+        using (var t = new LocalTarget(P("dst")))
+        {
+            var plan = SyncPlan.Build(SyncEngine.Scan(s, ex, false, default), SyncEngine.Scan(t, ex, true, default), false);
+            var settings = new SyncSettings { Mode = CopyMode.Mirror, Threads = 1, Retries = 0, ExtrasFirst = true };
+            var result = await SyncEngine.RunAsync(plan, () => new LocalSource(P("src")), () => new LocalTarget(P("dst")), settings, new ProgressCounter("x"),
+                line => { lock (log) log.Add(line); }, default);
+            Assert.Equal(1, result.DeletedCount);
+        }
+        // The extra went before the new file came.
+        Assert.True(log.FindIndex(l => l.StartsWith("*EXTRA")) < log.FindIndex(l => l.StartsWith("New File")));
+        Assert.False(File.Exists(P("dst/old.bin")));
+        Assert.True(File.Exists(P("dst/new.bin")));
+    }
+
+    [Fact]
     public async Task One_restore_point_covers_every_source()
     {
         Write("a/x.txt", "x1");
@@ -321,5 +414,33 @@ public sealed class MultiSourceEngineTests : IDisposable
         var now = P("now");
         browser.Restore(RestorePoint.Current, ["A/x.txt"], now, false, new ProgressCounter("x"), _ => { }, default);
         Assert.Equal("x2", File.ReadAllText(Path.Combine(now, "A", "x.txt")));
+    }
+}
+
+public class InterruptionTests
+{
+    [Fact]
+    public void A_crashed_run_starts_again_but_not_forever()
+    {
+        var job = Guid.NewGuid();
+        var state = new Interruptions();
+        Assert.True(state.Interrupted(job));
+        Assert.True(state.Interrupted(job)); // the resumed run crashed too
+        Assert.False(state.Interrupted(job)); // a third time in a row: it waits for its schedule
+
+        // A run that ends by itself, whatever the outcome, starts the count again.
+        Assert.True(state.Finished(job));
+        Assert.True(state.Interrupted(job));
+        Assert.False(state.Finished(Guid.NewGuid()));
+    }
+
+    [Fact]
+    public void The_count_survives_a_restart()
+    {
+        var state = new Interruptions();
+        var job = Guid.NewGuid();
+        state.Interrupted(job);
+        var saved = JsonSerializer.Deserialize<Interruptions>(JsonSerializer.Serialize(state, Json.Options), Json.Options)!;
+        Assert.Equal(1, saved.Counts[job]);
     }
 }

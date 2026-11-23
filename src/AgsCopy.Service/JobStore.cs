@@ -47,7 +47,8 @@ public sealed class JobStore
                 // The folder is a plain name; with a single source there is none.
                 source.Folder = job.MultiSource ? source.Folder?.Trim() : null;
             }
-            job.Destination.Credential = Protect(job.Destination, existing?.Destination, lang);
+            for (var i = 0; i < job.Destinations.Count; i++)
+                job.Destinations[i].Credential = Protect(job.Destinations[i], JobExecutor.StoredDestination(existing, job.Destinations[i], i), lang);
             job.CreatedUtc = existing?.CreatedUtc ?? DateTime.UtcNow;
             job.ModifiedUtc = DateTime.UtcNow;
 
@@ -76,7 +77,7 @@ public sealed class JobStore
     public static CopyJob Sanitize(CopyJob job)
     {
         var copy = Json.Clone(job);
-        foreach (var c in copy.Sources.Append(copy.Destination).Select(e => e.Credential))
+        foreach (var c in copy.Sources.Concat(copy.Destinations).Select(e => e.Credential))
         {
             if (c == null) continue;
             c.HasPassword = !string.IsNullOrEmpty(c.ProtectedPassword);

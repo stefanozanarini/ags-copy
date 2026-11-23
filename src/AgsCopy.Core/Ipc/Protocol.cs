@@ -38,6 +38,8 @@ public static class Commands
     public const string RestoreStart = "restore.start";
     public const string RestoreStatus = "restore.status";
     public const string RestoreCancel = "restore.cancel";
+    /// <summary>Starts the runs a crash cut short (the watchdog asks at every check); returns how many.</summary>
+    public const string ResumeJobs = "jobs.resume";
 
     public static bool IsReadOnly(string command) => command is Status or ListJobs or History;
 }
@@ -104,9 +106,17 @@ public sealed class PathListResult
     public int Total { get; set; }
 }
 
+public sealed class RestorePointsRequest
+{
+    public Guid Id { get; set; }
+    /// <summary>Which destination of the job to read (0 = the first).</summary>
+    public int Destination { get; set; }
+}
+
 public sealed class RestoreListRequest
 {
     public Guid JobId { get; set; }
+    public int Destination { get; set; }
     /// <summary>Version folder stamp of the restore point; null = the current copy.</summary>
     public string? Stamp { get; set; }
     public string Relative { get; set; } = "";
@@ -115,6 +125,7 @@ public sealed class RestoreListRequest
 public sealed class RestoreStartRequest
 {
     public Guid JobId { get; set; }
+    public int Destination { get; set; }
     public string? Stamp { get; set; }
     /// <summary>Files and folders to restore, relative to the backup root, '/' separated.</summary>
     public List<string> Items { get; set; } = [];

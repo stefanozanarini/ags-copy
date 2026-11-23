@@ -13,10 +13,15 @@ public sealed class HistoryStore
     private readonly Dictionary<Guid, List<RunRecord>> _cache = [];
     private readonly ILogger<HistoryStore> _log;
 
-    public HistoryStore(ILogger<HistoryStore> log)
+    /// <summary>Jobs whose last run was still marked as running when the service started: a crash cut it short.</summary>
+    public IReadOnlyList<Guid> Interrupted { get; }
+
+    public HistoryStore(ServiceSettings settings, ILogger<HistoryStore> log)
     {
         _log = log;
-        // Runs still marked as running were cut short by a stop or a crash.
+        var interrupted = new List<Guid>();
+        Interrupted = interrupted;
+        // Runs still marked as running were cut short by a crash (a clean stop cancels them first).
         foreach (var file in Directory.EnumerateFiles(AppPaths.HistoryDir, "*.json"))
         {
             if (!Guid.TryParse(Path.GetFileNameWithoutExtension(file), out var id)) continue;
@@ -27,8 +32,9 @@ public sealed class HistoryStore
             {
                 r.Outcome = RunOutcome.Failed;
                 r.EndUtc ??= File.GetLastWriteTimeUtc(file);
-                r.Message = "Interrupted: the service stopped during the run.";
+                r.Message = Loc.Tl(settings.Language, "run.interrupted") + (r.Message is { Length: > 0 } m ? " " + m : "");
             }
+            if (runs[0].Outcome == RunOutcome.Failed && stale.Contains(runs[0])) interrupted.Add(id);
             Write(id, runs);
         }
     }

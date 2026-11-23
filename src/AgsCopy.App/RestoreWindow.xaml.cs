@@ -5,6 +5,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
 using AgsCopy.Core.Ipc;
+using AgsCopy.Core.Models;
 using AgsCopy.Core.Sync;
 using Microsoft.Win32;
 
@@ -92,12 +93,29 @@ public partial class RestoreWindow : Window
     }
 
     private string? Stamp => (PointBox.SelectedItem as PointOption)?.Stamp;
+    private int Destination => Math.Max(0, DestinationBox.SelectedIndex);
+    private bool _destinationsLoaded;
+
+    private async void Destination_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_destinationsLoaded) await LoadPointsAsync();
+    }
 
     private async Task LoadPointsAsync()
     {
         try
         {
-            var points = await PipeClient.CallAsync<List<RestorePoint>>(Commands.RestorePoints, new IdRequest { Id = _jobId }, TimeSpan.FromMinutes(2)) ?? [];
+            if (!_destinationsLoaded)
+            {
+                var job = await PipeClient.CallAsync<CopyJob>(Commands.GetJob, new IdRequest { Id = _jobId });
+                var destinations = job?.Destinations.Select(d => d.Path).ToList() ?? [];
+                DestinationBox.ItemsSource = destinations;
+                DestinationBox.SelectedIndex = 0;
+                DestinationPanel.Visibility = destinations.Count > 1 ? Visibility.Visible : Visibility.Collapsed;
+                _destinationsLoaded = true;
+            }
+            var points = await PipeClient.CallAsync<List<RestorePoint>>(Commands.RestorePoints,
+                new RestorePointsRequest { Id = _jobId, Destination = Destination }, TimeSpan.FromMinutes(2)) ?? [];
             PointBox.ItemsSource = points.Select(p => new PointOption(p.Stamp, p.Stamp == null
                 ? Loc.T("restore.point.current")
                 : Loc.F("restore.point.before", Fmt.DateTime(p.Local ?? DateTime.MinValue)))).ToList();
@@ -134,7 +152,7 @@ public partial class RestoreWindow : Window
     private async Task<List<RestoreNode>> ListAsync(RestoreNode? parent, string relative)
     {
         var items = await PipeClient.CallAsync<List<RestoreItem>>(Commands.RestoreList,
-            new RestoreListRequest { JobId = _jobId, Stamp = Stamp, Relative = relative }, TimeSpan.FromMinutes(2)) ?? [];
+            new RestoreListRequest { JobId = _jobId, Destination = Destination, Stamp = Stamp, Relative = relative }, TimeSpan.FromMinutes(2)) ?? [];
         return items.Select(i => new RestoreNode(i, parent, LoadChildrenAsync)).ToList();
     }
 
@@ -181,6 +199,7 @@ public partial class RestoreWindow : Window
             var started = await PipeClient.CallAsync<IdRequest>(Commands.RestoreStart, new RestoreStartRequest
             {
                 JobId = _jobId,
+                Destination = Destination,
                 Stamp = Stamp,
                 Items = items,
                 Target = TargetBox.Text.Trim(),

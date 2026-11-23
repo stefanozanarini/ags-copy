@@ -37,7 +37,7 @@ public sealed class RunningJob
 }
 
 /// <summary>Runs, previews and checks jobs.</summary>
-public sealed class JobExecutor(HistoryStore history, ReportStore reports, ServiceSettings settings, ILogger<JobExecutor> log) : IHostedService
+public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStore reports, ServiceSettings settings, ILogger<JobExecutor> log) : IHostedService
 {
     private const int MaxExtraEntriesCounted = 200_000;
     private const long MaxLogBytes = 4 * 1024 * 1024;
@@ -66,10 +66,74 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
         return true;
     }
 
+    private static string InterruptionsFile => Path.Combine(AppPaths.DataDir, "interrupted.json");
+    private readonly object _interruptionsLock = new();
+    private Interruptions _interruptions = new();
+    private readonly List<Guid> _toResume = [];
+
     public Task StartAsync(CancellationToken ct)
     {
         ShadowCopy.CleanupLeftovers(log);
+        lock (_interruptionsLock)
+        {
+            try
+            {
+                if (File.Exists(InterruptionsFile)) _interruptions = System.Text.Json.JsonSerializer.Deserialize<Interruptions>(File.ReadAllText(InterruptionsFile), Json.Options) ?? new();
+            }
+            catch (Exception e) when (e is IOException or System.Text.Json.JsonException)
+            {
+                log.LogWarning(e, "Cannot read {File}", InterruptionsFile);
+            }
+            foreach (var id in history.Interrupted)
+            {
+                if (store.Get(id) is not { Enabled: true } job) continue;
+                var again = _interruptions.Interrupted(id);
+                if (again) _toResume.Add(id);
+                // Say in the history what happens next.
+                if (history.Last(id) is { } last)
+                {
+                    last.Message += " " + Loc.Fl(settings.Language, again ? "run.resume.will" : "run.resume.exhausted", Interruptions.MaxAttempts);
+                    history.Put(last);
+                }
+                log.LogWarning("Job {Name}: the last run was cut short by a crash; {What}", job.Name, again ? "it will run again" : "not running it again");
+            }
+            SaveInterruptions();
+        }
         return Task.CompletedTask;
+    }
+
+    private void SaveInterruptions()
+    {
+        try
+        {
+            File.WriteAllText(InterruptionsFile, System.Text.Json.JsonSerializer.Serialize(_interruptions, Json.Options));
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            log.LogWarning(e, "Cannot write {File}", InterruptionsFile);
+        }
+    }
+
+    /// <summary>Starts again the runs a crash cut short; the watchdog asks at every check. Returns how many started.</summary>
+    public int ResumeInterrupted()
+    {
+        List<Guid> ids;
+        lock (_interruptionsLock)
+        {
+            ids = [.. _toResume];
+            _toResume.Clear();
+        }
+        var started = 0;
+        foreach (var id in ids)
+        {
+            if (store.Get(id) is not { Enabled: true } job) continue;
+            if (TryStart(job, RunTrigger.Resumed))
+            {
+                started++;
+                log.LogInformation("Job {Name} resumed after a crash of the service", job.Name);
+            }
+        }
+        return started;
     }
 
     public async Task StopAsync(CancellationToken ct)
@@ -91,7 +155,7 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
         history.Put(record);
         log.LogInformation("Job {Name} started ({Trigger})", job.Name, record.Trigger);
 
-        var dst = PathUtil.NormalizeDir(job.Destination.Path);
+        var destinations = job.Destinations.Select(d => PathUtil.NormalizeDir(d.Path)).ToList();
         var parts = new List<(string Label, string Command, string File)>();
         var leases = new List<NetworkShare.Lease>();
         var notes = new List<string>();
@@ -103,22 +167,26 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
         {
             leases.AddRange(Connect(job, null, null));
 
-            // Every source is prepared and scanned first, so the progress bar knows the whole run.
-            // With several sources one that cannot be read does not stop the others.
+            // Every source is prepared and scanned for every destination first, so the progress bar knows
+            // the whole run. With several pairs one that fails (a source unreadable, a destination offline)
+            // does not stop the others. Each source has one snapshot and one look for links, whatever the destinations.
+            var pairs = job.Pairs.ToList();
+            var linkScans = new Dictionary<int, List<LinkedFolder>>();
             var failed = 0;
-            for (var i = 0; i < job.Sources.Count; i++)
+            foreach (var (i, d) in pairs)
             {
-                var part = job.ForSource(i);
-                var label = job.MultiSource ? $"[{part.Source.Folder}] " : "";
+                var part = job.ForSource(i, d);
+                var label = job.PairLabel(i, d);
                 try
                 {
-                    runs.Add(await PrepareAsync(part, i, label, rj, snapshots, leases, notes, lang, ct));
+                    runs.Add(await PrepareAsync(part, d * job.Sources.Count + i, label, rj, snapshots, leases, notes,
+                        linkScans.TryGetValue(i, out var known) ? known : null, links => linkScans[i] = links, lang, ct));
                 }
-                catch (Exception e) when (job.MultiSource && e is not OperationCanceledException)
+                catch (Exception e) when (pairs.Count > 1 && e is not OperationCanceledException)
                 {
                     failed++;
                     notes.Add(label + e.Message);
-                    log.LogError(e, "Job {Name}: source {Source} failed", job.Name, part.Source.Path);
+                    log.LogError(e, "Job {Name}: {Source} → {Destination} failed", job.Name, part.Source.Path, part.Destination.Path);
                 }
             }
             rj.TotalFiles = runs.Sum(r => r.TotalFiles);
@@ -133,7 +201,7 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
                 else
                     await RunRobocopyAsync(run, rj, startLocal, logDir, stamp, parts, notes, versions, lang, ct);
             }
-            if (failed > 0) record.Outcome = Worse(record.Outcome, failed == job.Sources.Count ? RunOutcome.Failed : RunOutcome.Warning);
+            if (failed > 0) record.Outcome = Worse(record.Outcome, failed == pairs.Count ? RunOutcome.Failed : RunOutcome.Warning);
 
             // Without the snapshot open files may be missing, and a file that could not be
             // archived may have been overwritten: never report a clean success then.
@@ -169,7 +237,7 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
             if (record.Outcome == RunOutcome.Running) record.Outcome = RunOutcome.Failed;
 
             // The copy engine lists what it deleted itself; robocopy's deletions come from its log.
-            var found = new LogFindings(dst, job.Mode == CopyMode.Mirror && !job.Options.KeepVersions);
+            var found = new LogFindings(destinations, job.Mode == CopyMode.Mirror && !job.Options.KeepVersions);
             try
             {
                 MergeLogs(Path.Combine(logDir, record.LogFile), job, record, parts, found);
@@ -188,7 +256,7 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
                 {
                     JobName = job.Name,
                     Source = string.Join(Environment.NewLine, job.Sources.Select(s => s.Path)),
-                    Destination = job.Destination.Path,
+                    Destination = string.Join(Environment.NewLine, job.Destinations.Select(d => d.Path)),
                     Mode = job.Mode,
                     Record = record,
                     Notes = notes,
@@ -196,12 +264,14 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
                     ErrorCount = (int)record.Errors,
                     KeepVersions = job.Options.KeepVersions,
                     RetentionDays = job.Options.VersionRetentionDays,
-                    VersionsFolder = job.MultiSource ? PathUtil.Combine(dst, "*\\" + Versions.FolderName) : versions.Folder ?? Versions.Root(dst),
+                    VersionsFolder = runs.Count > 1
+                        ? string.Join(Environment.NewLine, runs.Select(r => Versions.Root(r.Dst)).Distinct(StringComparer.OrdinalIgnoreCase))
+                        : versions.Folder ?? Versions.Root(runs.FirstOrDefault()?.Dst ?? destinations[0]),
                     Archived = versions.Moved.Concat(engineResults.SelectMany(r => r.Archived)).Take(RunReport.MaxListedItems).ToList(),
                     ArchivedCount = versions.Count + engineResults.Sum(r => r.ArchivedCount),
                     VersionFoldersRemoved = versions.FoldersRemoved,
-                    Deleted = found.Deleted.Concat(engineResults.SelectMany(r => r.Deleted)).Take(RunReport.MaxListedItems).ToList(),
-                    DeletedCount = found.DeletedCount + engineResults.Sum(r => r.DeletedCount),
+                    Deleted = versions.Deleted.Concat(found.Deleted).Concat(engineResults.SelectMany(r => r.Deleted)).Take(RunReport.MaxListedItems).ToList(),
+                    DeletedCount = versions.DeletedCount + found.DeletedCount + engineResults.Sum(r => r.DeletedCount),
                     LogFile = record.LogFile,
                 }, lang);
             }
@@ -212,6 +282,9 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
 
             history.Put(record);
             reports.RebuildIndex();
+            // Ended by itself: a later crash counts from zero again.
+            lock (_interruptionsLock)
+                if (_interruptions.Finished(job.Id)) SaveInterruptions();
             _running.TryRemove(job.Id, out _);
             _tasks.TryRemove(job.Id, out _);
             rj.Cancel.Dispose();
@@ -262,8 +335,10 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
     /// Checks a source, takes its shadow copy (one per volume and run), finds the DFS links below it and
     /// scans what there is to copy.
     /// </summary>
+    /// <param name="knownLinks">The links of this source found for an earlier destination; null to look for them.</param>
+    /// <param name="foundLinks">Receives the links found, for the next destinations.</param>
     private async Task<SourceRun> PrepareAsync(CopyJob part, int index, string label, RunningJob rj, Dictionary<string, ShadowCopy> snapshots,
-        List<NetworkShare.Lease> leases, List<string> notes, string? lang, CancellationToken ct)
+        List<NetworkShare.Lease> leases, List<string> notes, List<LinkedFolder>? knownLinks, Action<List<LinkedFolder>> foundLinks, string? lang, CancellationToken ct)
     {
         var src = PathUtil.NormalizeDir(part.Source.Path);
         var dst = PathUtil.NormalizeDir(part.Destination.Path);
@@ -272,8 +347,8 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
         if ((part.Source.IsNetwork || part.Destination.IsNetwork) && PathUtil.Overlaps(DfsClient.Resolve(src), DfsClient.Resolve(dst)))
             throw new ServiceException(Loc.Fl(lang, "err.overlap.dfs", src, dst));
 
-        var links = new List<LinkedFolder>();
-        if (part.Source.IsNetwork)
+        var links = knownLinks ?? [];
+        if (part.Source.IsNetwork && knownLinks == null)
         {
             try
             {
@@ -287,6 +362,7 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
                 notes.Add(label + Loc.Fl(lang, "run.links.failed", e.Message));
             }
             leases.AddRange(ConnectDfsTargets(part, null, src, links, lang));
+            foundLinks(links);
         }
 
         // From here on runJob reads the source from the snapshot, when there is one.
@@ -411,6 +487,21 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
         var part = run.Part;
         var culture = Loc.CultureOf(lang);
 
+        // Room first: expired versions go before anything is copied, and so may the extras of a mirror.
+        if (part.Options.KeepVersions)
+        {
+            var removed = RemoveExpiredVersions(run.Dst, part.Options.VersionRetentionDays);
+            versions.FoldersRemoved += removed;
+            if (removed > 0) notes.Add(run.Label + Loc.Fl(lang, "run.versions.removed", removed, part.Options.VersionRetentionDays));
+        }
+        if (part.Mode == CopyMode.Mirror && part.Options.DeleteExtrasFirst && !part.Options.KeepVersions && Directory.Exists(run.Dst))
+        {
+            var before = versions.DeletedCount;
+            foreach (var s in run.Segments) DeleteExtras(s, versions, record, ct);
+            if (versions.DeletedCount > before)
+                notes.Add(run.Label + Loc.Fl(lang, "run.extrasfirst", Fmt.Count(versions.DeletedCount - before, culture)));
+        }
+
         if (part.Options.KeepVersions && Directory.Exists(run.Dst))
         {
             var before = versions.Count;
@@ -468,13 +559,6 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
         record.FilesExtra += total.Files.Extras;
         record.DirsExtra += total.Dirs.Extras;
         if (tasks.Count > 1) notes.Add(run.Label + Loc.Fl(lang, "run.parallel", tasks.Count));
-
-        if (part.Options.KeepVersions)
-        {
-            var removed = RemoveExpiredVersions(run.Dst, part.Options.VersionRetentionDays);
-            versions.FoldersRemoved += removed;
-            if (removed > 0) notes.Add(run.Label + Loc.Fl(lang, "run.versions.removed", removed, part.Options.VersionRetentionDays));
-        }
 
         if (part.Options.Compress)
         {
@@ -544,6 +628,14 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
             lock (writer) writer.WriteLine(line);
         }
 
+        // Room first: expired versions go before anything is copied.
+        if (job.Options.KeepVersions && run.Plan!.DestinationExists)
+        {
+            using var t = run.OpenTarget!();
+            var removed = SyncEngine.RemoveExpiredVersions(t, job.Options.VersionRetentionDays, Log);
+            if (removed > 0) notes.Add(run.Label + Loc.Fl(lang, "run.versions.removed", removed, job.Options.VersionRetentionDays));
+        }
+
         var result = await SyncEngine.RunAsync(run.Plan!, run.OpenSource!, run.OpenTarget!, new SyncSettings
         {
             Mode = job.Mode,
@@ -553,14 +645,8 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
             Threads = run.Threads,
             Retries = job.Options.Retries,
             RetryWaitSeconds = job.Options.RetryWaitSeconds,
+            ExtrasFirst = job.Options.DeleteExtrasFirst && !job.Options.KeepVersions,
         }, counter, Log, ct);
-
-        if (job.Options.KeepVersions)
-        {
-            using var t = run.OpenTarget!();
-            var removed = SyncEngine.RemoveExpiredVersions(t, job.Options.VersionRetentionDays, Log);
-            if (removed > 0) notes.Add(run.Label + Loc.Fl(lang, "run.versions.removed", removed, job.Options.VersionRetentionDays));
-        }
         if (result.ArchivedCount > 0) notes.Add(run.Label + Loc.Fl(lang, "run.versions", Fmt.Count(result.ArchivedCount, culture), PathUtil.Combine(run.Dst, result.VersionsFolder!)));
         if (result.FilesCompressed > 0) notes.Add(run.Label + Loc.Fl(lang, "run.gz", Fmt.Count(result.FilesCompressed, culture)));
 
@@ -586,6 +672,10 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
         public List<VersionMove> Moved { get; } = [];
         public List<CopyError> Errors { get; } = [];
         public int FoldersRemoved { get; set; }
+
+        /// <summary>Extras of a mirror deleted before the copy.</summary>
+        public List<string> Deleted { get; } = [];
+        public long DeletedCount { get; set; }
     }
 
     /// <summary>Runs robocopy /L over the whole job into a temporary list file and returns its path.</summary>
@@ -623,6 +713,49 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
             {
                 if (result.Errors.Count < ErrorCollector.MaxErrors)
                     result.Errors.Add(new CopyError(m.DestinationPath, e.HResult & 0xFFFF, "→ " + Versions.FolderName, e.Message));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Mirror with <see cref="CopyOptions.DeleteExtrasFirst"/>: deletes what the robocopy /L list shows
+    /// only in the destination, before the copy, to make room. Robocopy then finds nothing to purge.
+    /// </summary>
+    private static void DeleteExtras(Segment s, ArchiveResult result, RunRecord record, CancellationToken ct)
+    {
+        if (s.ListFile == null || !File.Exists(s.ListFile)) return;
+        foreach (var m in Versions.Plan(File.ReadLines(s.ListFile), s.Src, s.Dst, CopyMode.Mirror).Where(m => m.Reason == VersionReason.Deleted).ToList())
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                if (m.IsDirectory)
+                {
+                    if (!Directory.Exists(m.DestinationPath)) continue;
+                    // Copies keep the read-only attribute, which would stop the delete.
+                    foreach (var f in new DirectoryInfo(m.DestinationPath).EnumerateFiles("*", new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint }))
+                    {
+                        if (f.IsReadOnly) f.IsReadOnly = false;
+                        record.FilesExtra++;
+                    }
+                    Directory.Delete(m.DestinationPath, recursive: true);
+                    record.DirsExtra++;
+                }
+                else
+                {
+                    var f = new FileInfo(m.DestinationPath);
+                    if (!f.Exists) continue;
+                    if (f.IsReadOnly) f.IsReadOnly = false;
+                    f.Delete();
+                    record.FilesExtra++;
+                }
+                result.DeletedCount++;
+                if (result.Deleted.Count < RunReport.MaxListedItems) result.Deleted.Add(m.DestinationPath);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                if (result.Errors.Count < ErrorCollector.MaxErrors)
+                    result.Errors.Add(new CopyError(m.DestinationPath, e.HResult & 0xFFFF, "Deleting Extra", e.Message));
             }
         }
     }
@@ -670,12 +803,16 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
         try
         {
             leases.AddRange(Connect(job, stored, lang));
-            for (var i = 0; i < job.Sources.Count; i++)
+            foreach (var (i, d) in job.Pairs)
             {
-                var part = job.ForSource(i);
-                var storedPart = stored == null ? null : new CopyJob { Source = StoredSource(stored, job.Sources[i], i) ?? new JobEndpoint(), Destination = stored.Destination };
+                var part = job.ForSource(i, d);
+                var storedPart = stored == null ? null : new CopyJob
+                {
+                    Source = StoredSource(stored, job.Sources[i], i) ?? new JobEndpoint(),
+                    Destination = StoredDestination(stored, job.Destinations[d], d) ?? new JobEndpoint(),
+                };
                 var r = await PreviewSourceAsync(part, storedPart, leases, lang, ct);
-                if (job.MultiSource && r.Error != null) r.Error = $"[{part.Source.Folder}] {r.Error}";
+                if (r.Error != null) r.Error = job.PairLabel(i, d) + r.Error;
                 if (total == null) total = r;
                 else total.Merge(r);
             }
@@ -693,7 +830,7 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
         {
             foreach (var l in leases) l.Dispose();
         }
-        total!.Destination = PathUtil.NormalizeDir(job.Destination.Path);
+        total!.Destination = string.Join(", ", job.Destinations.Select(x => PathUtil.NormalizeDir(x.Path)));
         total.Elapsed = sw.Elapsed;
         return total;
     }
@@ -830,7 +967,7 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
         NetworkShare.Lease? lease = null;
         try
         {
-            var storedEndpoint = req.IsDestination ? stored?.Destination : StoredSource(stored, req.Endpoint, -1);
+            var storedEndpoint = req.IsDestination ? StoredDestination(stored, req.Endpoint, -1) : StoredSource(stored, req.Endpoint, -1);
             if (req.Endpoint.IsNetwork && req.Endpoint.HasCredential)
                 lease = NetworkShare.Connect(root, req.Endpoint.Credential!.UserName, PasswordFor(req.Endpoint, storedEndpoint, lang));
 
@@ -876,7 +1013,7 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
     {
         try
         {
-            var storedEndpoint = req.IsDestination ? stored?.Destination : StoredSource(stored, req.Endpoint, -1);
+            var storedEndpoint = req.IsDestination ? StoredDestination(stored, req.Endpoint, -1) : StoredSource(stored, req.Endpoint, -1);
             var client = Sftp.Connect(req.Endpoint, storedEndpoint, NullIfEmpty(req.Endpoint.HostKey), lang, out var hostKey);
             using var store = new SftpStore(client, SftpLocation.TryParse(req.Endpoint.Path)!);
             if (store.Exists())
@@ -907,7 +1044,7 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
     {
         try
         {
-            var storedEndpoint = req.IsDestination ? stored?.Destination : StoredSource(stored, req.Endpoint, -1);
+            var storedEndpoint = req.IsDestination ? StoredDestination(stored, req.Endpoint, -1) : StoredSource(stored, req.Endpoint, -1);
             var client = Sftp.Connect(req.Endpoint, storedEndpoint, NullIfEmpty(req.Endpoint.HostKey), lang, out _);
             using var store = new SftpStore(client, SftpLocation.TryParse(req.Endpoint.Path)!);
             var rel = req.Relative.Replace('\\', '/').Trim('/');
@@ -941,7 +1078,7 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
         NetworkShare.Lease? lease = null;
         try
         {
-            var storedEndpoint = req.IsDestination ? stored?.Destination : StoredSource(stored, req.Endpoint, -1);
+            var storedEndpoint = req.IsDestination ? StoredDestination(stored, req.Endpoint, -1) : StoredSource(stored, req.Endpoint, -1);
             if (req.Endpoint.IsNetwork && req.Endpoint.HasCredential)
                 lease = NetworkShare.Connect(path, req.Endpoint.Credential!.UserName, PasswordFor(req.Endpoint, storedEndpoint, lang));
 
@@ -988,7 +1125,8 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
         var leases = new List<NetworkShare.Lease>();
         try
         {
-            var endpoints = job.Sources.Select((e, i) => (e, StoredSource(stored, e, i))).Append((job.Destination, stored?.Destination));
+            var endpoints = job.Sources.Select((e, i) => (e, StoredSource(stored, e, i)))
+                .Concat(job.Destinations.Select((e, i) => (e, StoredDestination(stored, e, i))));
             foreach (var (e, s) in endpoints)
             {
                 if (e.IsNetwork && e.HasCredential)
@@ -1007,13 +1145,17 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
     /// The saved version of a source being edited, whose secrets fill those not retyped: the one with
     /// the same path, else the one at the same place, else one with the same user.
     /// </summary>
-    internal static JobEndpoint? StoredSource(CopyJob? stored, JobEndpoint e, int index)
+    internal static JobEndpoint? StoredSource(CopyJob? stored, JobEndpoint e, int index) => Match(stored?.Sources, e, index);
+
+    /// <summary>Likewise for a destination.</summary>
+    internal static JobEndpoint? StoredDestination(CopyJob? stored, JobEndpoint e, int index) => Match(stored?.Destinations, e, index);
+
+    private static JobEndpoint? Match(IReadOnlyList<JobEndpoint>? saved, JobEndpoint e, int index)
     {
-        if (stored == null) return null;
-        var sources = stored.Sources;
-        return sources.FirstOrDefault(s => string.Equals(PathUtil.NormalizeDir(s.Path), PathUtil.NormalizeDir(e.Path), StringComparison.OrdinalIgnoreCase))
-            ?? (index >= 0 && index < sources.Count ? sources[index] : null)
-            ?? sources.FirstOrDefault(s => e.Credential != null && string.Equals(s.Credential?.UserName, e.Credential.UserName, StringComparison.OrdinalIgnoreCase));
+        if (saved == null) return null;
+        return saved.FirstOrDefault(s => string.Equals(PathUtil.NormalizeDir(s.Path), PathUtil.NormalizeDir(e.Path), StringComparison.OrdinalIgnoreCase))
+            ?? (index >= 0 && index < saved.Count ? saved[index] : null)
+            ?? saved.FirstOrDefault(s => e.Credential != null && string.Equals(s.Credential?.UserName, e.Credential.UserName, StringComparison.OrdinalIgnoreCase));
     }
 
     private static string PasswordFor(JobEndpoint e, JobEndpoint? stored, string? lang)
@@ -1034,9 +1176,9 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
             .ToList();
 
     /// <summary>What the report needs from the run's log: errors and, for a mirror, what it deleted.</summary>
-    private sealed class LogFindings(string destination, bool collectDeleted)
+    private sealed class LogFindings(IEnumerable<string> destinations, bool collectDeleted)
     {
-        private readonly string _destination = PathUtil.WithSlash(destination);
+        private readonly List<string> _destinations = destinations.Select(PathUtil.WithSlash).ToList();
 
         public ErrorCollector Errors { get; } = new();
         public List<string> Deleted { get; } = [];
@@ -1045,7 +1187,7 @@ public sealed class JobExecutor(HistoryStore history, ReportStore reports, Servi
         public void Add(string line)
         {
             Errors.Add(line);
-            if (!collectDeleted || RobocopyOutput.ParseLine(line) is not { } l || !PathUtil.IsUnder(l.Path, _destination)) return;
+            if (!collectDeleted || RobocopyOutput.ParseLine(line) is not { } l || !_destinations.Any(d => PathUtil.IsUnder(l.Path, d))) return;
             DeletedCount++;
             if (Deleted.Count < RunReport.MaxListedItems) Deleted.Add(l.Path);
         }

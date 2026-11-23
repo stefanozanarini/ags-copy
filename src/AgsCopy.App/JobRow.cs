@@ -3,12 +3,51 @@ using AgsCopy.Core.Models;
 
 namespace AgsCopy.App;
 
-/// <summary>One line of the job list, updated in place on every refresh.</summary>
+/// <summary>A page of a job in the tree: sources and destinations, options, schedule, summary.</summary>
+public sealed class PageNode(JobRow row, int index, string titleKey) : ObservableObject
+{
+    private bool _selected;
+
+    public JobRow Row { get; } = row;
+    public int Index { get; } = index;
+    public string Title => Loc.T(titleKey);
+
+    public bool IsSelected
+    {
+        get => _selected;
+        set => Set(ref _selected, value);
+    }
+
+    /// <summary>Pages have nothing to expand; the tree binds it on every node.</summary>
+    public bool IsExpanded { get => false; set { } }
+}
+
+/// <summary>A job in the tree, updated in place on every refresh.</summary>
 public sealed class JobRow : ObservableObject
 {
     private JobStatus _s;
+    private bool _selected;
+    private bool _expanded;
 
-    public JobRow(JobStatus s) => _s = s;
+    public JobRow(JobStatus s)
+    {
+        _s = s;
+        Pages = new[] { "page.endpoints", "page.options", "page.schedule", "page.summary" }.Select((k, i) => new PageNode(this, i, k)).ToList();
+    }
+
+    public IReadOnlyList<PageNode> Pages { get; }
+
+    public bool IsSelected
+    {
+        get => _selected;
+        set => Set(ref _selected, value);
+    }
+
+    public bool IsExpanded
+    {
+        get => _expanded;
+        set => Set(ref _expanded, value);
+    }
 
     public Guid Id => _s.Id;
     public JobStatus Status => _s;
@@ -31,6 +70,9 @@ public sealed class JobRow : ObservableObject
     public string ScheduleText => _s.Enabled ? JobDescriber.DescribeSchedule(_s.Schedule) : Loc.T("main.disabled");
 
     public string NextRunText => _s.NextRunLocal is { } n ? Fmt.DateTime(n) : "—";
+
+    /// <summary>Under the job name in the tree: the schedule, or when it runs next.</summary>
+    public string NextRunLine => _s.NextRunLocal is { } n ? Loc.F("main.nextrun", Fmt.DateTime(n)) : ScheduleText;
 
     public string StateText
     {

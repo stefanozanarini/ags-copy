@@ -1,12 +1,10 @@
-<Window x:Class="AgsCopy.App.JobEditorWindow"
-        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:l="clr-namespace:AgsCopy.App"
-        xmlns:core="clr-namespace:AgsCopy.Core;assembly=AgsCopy.Core"
-        Style="{StaticResource AppWindow}"
-        Title="{l:T editor.title}" Width="980" Height="700" MinWidth="820" MinHeight="560"
-        WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
-    <Window.Resources>
+<UserControl x:Class="AgsCopy.App.JobEditorView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:l="clr-namespace:AgsCopy.App"
+             xmlns:core="clr-namespace:AgsCopy.Core;assembly=AgsCopy.Core"
+             Background="White">
+    <UserControl.Resources>
         <!-- Lines of the plain-language summary, coloured by importance. -->
         <DataTemplate x:Key="SummaryLineTemplate" DataType="{x:Type core:SummaryLine}">
             <Border x:Name="Box" Padding="10,6" Margin="0,0,0,4" CornerRadius="4" Background="{StaticResource Surface}">
@@ -30,128 +28,27 @@
             <Setter Property="Padding" Value="8,0,0,0" />
             <Setter Property="VerticalContentAlignment" Value="Top" />
         </Style>
-
-        <!-- Path, credentials and access check of a source or destination (DataContext: EndpointViewModel). -->
-        <DataTemplate x:Key="EndpointTemplate" DataType="{x:Type l:EndpointViewModel}">
-            <StackPanel>
-                <TextBlock Text="{l:T endpoint.path}" Style="{StaticResource FieldLabel}" />
-                <DockPanel>
-                    <Button DockPanel.Dock="Right" Content="{l:T endpoint.browse}" Click="Browse_Click" Margin="6,0,0,0"
-                            IsEnabled="{Binding IsSftp, Converter={x:Static l:Not.Instance}}" />
-                    <TextBox Text="{Binding Path, UpdateSourceTrigger=PropertyChanged}" FontFamily="Consolas" />
-                </DockPanel>
-                <TextBlock Text="{l:T endpoint.path.hint}" Style="{StaticResource Hint}" />
-
-                <!-- A drive letter mapped to a share: the service cannot see it. -->
-                <Border Style="{StaticResource Card}" Background="{StaticResource WarningLight}" BorderBrush="{StaticResource Warning}"
-                        Visibility="{Binding HasMappedUnc, Converter={StaticResource BoolToVis}}">
-                    <StackPanel>
-                        <TextBlock Text="{Binding MappedText}" Foreground="{StaticResource Warning}" FontWeight="SemiBold" TextWrapping="Wrap" />
-                        <Button Content="{l:T endpoint.mapped.use}" Click="UseMapped_Click" HorizontalAlignment="Left" Margin="0,6,0,0" />
-                    </StackPanel>
-                </Border>
-
-                <!-- Always shown, so it is clear where the account goes; usable for \\server\share paths. -->
-                <Border Style="{StaticResource Card}" Background="{StaticResource AccentLight}" BorderBrush="{StaticResource Accent}">
-                    <StackPanel>
-                        <TextBlock Text="{l:T endpoint.network}" FontWeight="SemiBold" />
-                        <TextBlock Text="{l:T endpoint.network.hint}" Style="{StaticResource Hint}" />
-                        <TextBlock Text="{l:T endpoint.network.local}" Style="{StaticResource Hint}" FontStyle="Italic"
-                                   Visibility="{Binding IsLocal, Converter={StaticResource BoolToVis}}" />
-                        <TextBlock Text="{l:T endpoint.sftp.hint}" Style="{StaticResource Hint}"
-                                   Visibility="{Binding IsSftp, Converter={StaticResource BoolToVis}}" />
-                        <Grid IsEnabled="{Binding IsRemote}">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="12" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel>
-                                <TextBlock Text="{l:T endpoint.user}" Style="{StaticResource FieldLabel}" />
-                                <TextBox Text="{Binding UserName, UpdateSourceTrigger=PropertyChanged}" />
-                            </StackPanel>
-                            <StackPanel Grid.Column="2">
-                                <TextBlock Text="{l:T endpoint.password}" Style="{StaticResource FieldLabel}" />
-                                <PasswordBox PasswordChanged="Password_Changed" />
-                            </StackPanel>
-                        </Grid>
-                        <TextBlock Text="{l:T endpoint.password.stored}" Style="{StaticResource Hint}"
-                                   Visibility="{Binding HasStoredPassword, Converter={StaticResource BoolToVis}}" />
-
-                        <!-- SFTP: private key instead of (or with, as passphrase) the password, and the server's fingerprint. -->
-                        <StackPanel Visibility="{Binding IsSftp, Converter={StaticResource BoolToVis}}">
-                            <TextBlock Text="{l:T endpoint.key}" Style="{StaticResource FieldLabel}" />
-                            <StackPanel Orientation="Horizontal">
-                                <Button Content="{l:T endpoint.key.choose}" Click="ChooseKey_Click" />
-                                <Button Content="{l:T endpoint.key.remove}" Click="RemoveKey_Click"
-                                        Visibility="{Binding UsesKey, Converter={StaticResource BoolToVis}}" />
-                                <TextBlock Text="{Binding KeyText}" VerticalAlignment="Center" Margin="4,0,0,0" />
-                            </StackPanel>
-                            <TextBlock Text="{l:T endpoint.key.hint}" Style="{StaticResource Hint}" />
-                            <TextBlock Text="{Binding HostKeyText}" FontFamily="Consolas" TextWrapping="Wrap" Margin="0,0,0,6" />
-                        </StackPanel>
-                        <TextBlock Text="{l:T endpoint.encrypted}" Style="{StaticResource Hint}" />
-                    </StackPanel>
-                </Border>
-
-                <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-                    <Button Content="{l:T endpoint.test}" Click="Test_Click" />
-                    <TextBlock x:Name="Result" Text="{Binding TestResult}" VerticalAlignment="Center" TextWrapping="Wrap" MaxWidth="480" FontWeight="SemiBold" />
-                </StackPanel>
-
-                <!-- What the service sees in the folder, after a successful check. -->
-                <Border BorderBrush="{StaticResource Border}" BorderThickness="1" CornerRadius="4" Padding="8,6" Margin="0,8,0,0" Background="White"
-                        Visibility="{Binding HasListing, Converter={StaticResource BoolToVis}}">
-                    <StackPanel>
-                        <ItemsControl ItemsSource="{Binding Listing}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate DataType="{x:Type l:ListingItem}">
-                                    <StackPanel Orientation="Horizontal" Margin="0,1">
-                                        <TextBlock Text="{Binding Glyph}" FontFamily="Segoe MDL2 Assets" Foreground="{StaticResource Muted}" VerticalAlignment="Center" Margin="0,0,6,0" />
-                                        <TextBlock Text="{Binding Name}" VerticalAlignment="Center" />
-                                        <TextBlock Text="{Binding Detail}" Foreground="{StaticResource Muted}" VerticalAlignment="Center" Margin="8,0,0,0" />
-                                    </StackPanel>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                        <TextBlock Text="{Binding ListingMore}" Foreground="{StaticResource Muted}" Margin="0,2,0,0" />
-                    </StackPanel>
-                </Border>
-            </StackPanel>
-            <DataTemplate.Triggers>
-                <DataTrigger Binding="{Binding TestOk}" Value="True">
-                    <Setter TargetName="Result" Property="Foreground" Value="{StaticResource Ok}" />
-                </DataTrigger>
-                <DataTrigger Binding="{Binding TestOk}" Value="False">
-                    <Setter TargetName="Result" Property="Foreground" Value="{StaticResource Danger}" />
-                </DataTrigger>
-            </DataTemplate.Triggers>
-        </DataTemplate>
-    </Window.Resources>
+    </UserControl.Resources>
 
     <DockPanel>
-        <!-- Buttons -->
-        <Border DockPanel.Dock="Bottom" Background="{StaticResource Surface}" BorderBrush="{StaticResource Border}" BorderThickness="0,1,0,0" Padding="16,10">
-            <DockPanel>
-                <Button DockPanel.Dock="Left" Content="{l:T editor.cancel}" IsCancel="True" />
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                    <Button Content="{l:T editor.back}" Click="Back_Click" IsEnabled="{Binding IsFirstStep, Converter={x:Static l:Not.Instance}}" />
-                    <Button Content="{l:T editor.next}" Click="Next_Click" Visibility="{Binding IsSummaryStep, Converter={x:Static l:NotVisible.Instance}}" />
-                    <Button x:Name="SaveButton" Content="{l:T editor.save}" Style="{StaticResource PrimaryButton}" Click="Save_Click" />
-                </StackPanel>
-            </DockPanel>
+        <!-- Job name and page -->
+        <Border DockPanel.Dock="Top" BorderBrush="{StaticResource Border}" BorderThickness="0,0,0,1" Padding="24,10">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock x:Name="JobTitle" FontSize="18" FontWeight="SemiBold" />
+                <TextBlock x:Name="PageTitle" FontSize="18" Foreground="{StaticResource Muted}" Margin="10,0,0,0" />
+            </StackPanel>
         </Border>
 
-        <!-- Steps -->
-        <Border DockPanel.Dock="Left" Width="210" Background="{StaticResource Surface}" BorderBrush="{StaticResource Border}" BorderThickness="0,0,1,0">
-            <ListBox ItemsSource="{Binding StepTitles}" SelectedIndex="{Binding Step}" BorderThickness="0" Background="Transparent" Padding="0,10">
-                <ListBox.ItemContainerStyle>
-                    <Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
-                        <Setter Property="Padding" Value="16,9" />
-                        <Setter Property="FontSize" Value="14" />
-                    </Style>
-                </ListBox.ItemContainerStyle>
-            </ListBox>
+        <!-- Save bar: nothing is saved before the summary has been shown -->
+        <Border DockPanel.Dock="Bottom" Background="{StaticResource Surface}" BorderBrush="{StaticResource Border}" BorderThickness="0,1,0,0" Padding="16,8">
+            <DockPanel>
+                <TextBlock x:Name="DirtyText" Text="{l:T editor.unsaved}" Foreground="{StaticResource Warning}" FontWeight="SemiBold"
+                           VerticalAlignment="Center" Visibility="Hidden" />
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button x:Name="DiscardButton" Content="{l:T editor.discard}" Click="Discard_Click" IsEnabled="False" />
+                    <Button x:Name="SaveButton" Content="{l:T editor.save}" Style="{StaticResource PrimaryButton}" Click="Save_Click" Margin="0" />
+                </StackPanel>
+            </DockPanel>
         </Border>
 
         <TabControl SelectedIndex="{Binding Step}" BorderThickness="0" Padding="0">
@@ -161,85 +58,89 @@
                 </Style>
             </TabControl.ItemContainerStyle>
 
-            <!-- 1. General -->
+            <!-- 1. Sources and destinations -->
             <TabItem>
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <StackPanel Margin="24,18" MaxWidth="640" HorizontalAlignment="Left">
-                        <TextBlock Text="{l:T step.general}" Style="{StaticResource SectionTitle}" />
-                        <TextBlock Text="{l:T general.hint}" Style="{StaticResource Hint}" />
-                        <TextBlock Text="{l:T general.name}" Style="{StaticResource FieldLabel}" />
-                        <TextBox x:Name="NameBox" Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" />
-                        <CheckBox Content="{l:T general.enabled}" IsChecked="{Binding Enabled}" Margin="0,14,0,0" />
-                        <TextBlock Text="{l:T general.enabled.hint}" Style="{StaticResource Hint}" Margin="20,2,0,0" />
-                    </StackPanel>
-                </ScrollViewer>
-            </TabItem>
+                <Grid Margin="24,14,24,10">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" MinHeight="120" />
+                        <RowDefinition Height="10" />
+                        <RowDefinition Height="*" MinHeight="120" />
+                    </Grid.RowDefinitions>
 
-            <!-- 2. Source -->
-            <TabItem>
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <StackPanel Margin="24,18" MaxWidth="680" HorizontalAlignment="Left">
-                        <TextBlock Text="{l:T step.source}" Style="{StaticResource SectionTitle}" />
-                        <TextBlock Text="{l:T source.hint}" Style="{StaticResource Hint}" />
-
-                        <!-- Several sources: each is copied into its own folder of the destination. -->
-                        <Border Style="{StaticResource Card}">
-                            <StackPanel>
-                                <TextBlock Text="{l:T sources.title}" FontWeight="SemiBold" />
-                                <TextBlock Text="{l:T sources.hint}" Style="{StaticResource Hint}" />
-                                <ListBox ItemsSource="{Binding Sources}" SelectedItem="{Binding SelectedSource}" MaxHeight="170" Margin="0,2,0,8"
-                                         Visibility="{Binding IsMultiSource, Converter={StaticResource BoolToVis}}">
-                                    <ListBox.ItemTemplate>
-                                        <DataTemplate DataType="{x:Type l:EndpointViewModel}">
-                                            <DockPanel>
-                                                <TextBlock DockPanel.Dock="Right" Foreground="{StaticResource Muted}" Margin="12,0,0,0">
-                                                    <Run Text="→ " /><Run Text="{Binding Folder, Mode=OneWay}" />
-                                                </TextBlock>
-                                                <TextBlock Text="{Binding Title}" FontFamily="Consolas" TextTrimming="CharacterEllipsis" />
-                                            </DockPanel>
-                                        </DataTemplate>
-                                    </ListBox.ItemTemplate>
-                                </ListBox>
-                                <StackPanel Orientation="Horizontal">
-                                    <Button Content="{l:T sources.add}" Click="AddSource_Click" />
-                                    <Button Content="{l:T sources.remove}" Click="RemoveSource_Click" IsEnabled="{Binding CanRemoveSource}" />
-                                </StackPanel>
-                            </StackPanel>
-                        </Border>
-
-                        <StackPanel DataContext="{Binding SelectedSource}">
-                            <StackPanel Visibility="{Binding DataContext.IsMultiSource, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BoolToVis}}">
-                                <TextBlock Text="{l:T sources.folder}" Style="{StaticResource FieldLabel}" />
-                                <TextBox Text="{Binding Folder, UpdateSourceTrigger=LostFocus}" />
-                                <TextBlock Text="{l:T sources.folder.hint}" Style="{StaticResource Hint}" />
-                            </StackPanel>
-                            <ContentControl x:Name="SourceEditor" Content="{Binding}" ContentTemplate="{StaticResource EndpointTemplate}" Tag="source" />
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                        <StackPanel>
+                            <TextBlock Text="{l:T general.name}" Style="{StaticResource FieldLabel}" />
+                            <TextBox x:Name="NameBox" Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" Width="340" />
                         </StackPanel>
+                        <CheckBox Content="{l:T general.enabled}" IsChecked="{Binding Enabled}" VerticalAlignment="Bottom" Margin="18,0,0,4"
+                                  ToolTip="{l:T general.enabled.hint}" />
                     </StackPanel>
-                </ScrollViewer>
-            </TabItem>
 
-            <!-- 3. Destination -->
-            <TabItem>
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <StackPanel Margin="24,18" MaxWidth="680" HorizontalAlignment="Left" DataContext="{Binding Destination}">
-                        <TextBlock Text="{l:T step.destination}" Style="{StaticResource SectionTitle}" />
-                        <TextBlock Text="{l:T destination.hint}" Style="{StaticResource Hint}" />
-                        <ContentControl Content="{Binding}" ContentTemplate="{StaticResource EndpointTemplate}" Tag="destination" />
-                        <Border Style="{StaticResource Card}">
-                            <StackPanel>
-                                <TextBlock Text="{l:T layout.card}" FontWeight="SemiBold" />
-                                <TextBlock Text="{l:T layout.card.hint}" Style="{StaticResource Hint}" />
-                                <Button Content="{l:T layout.open}" Click="Layout_Click" HorizontalAlignment="Left" />
+                    <!-- Sources -->
+                    <DockPanel Grid.Row="1">
+                        <DockPanel DockPanel.Dock="Top">
+                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                <Button Content="{l:T list.add}" Click="AddSource_Click" Style="{StaticResource PrimaryButton}" />
+                                <Button Content="{l:T list.edit}" Click="EditSource_Click" IsEnabled="{Binding SelectedSource, Converter={x:Static l:NotNull.Instance}}" />
+                                <Button Content="{l:T list.remove}" Click="RemoveSource_Click" IsEnabled="{Binding SelectedSource, Converter={x:Static l:NotNull.Instance}}" />
+                                <Button Content="{l:T layout.open}" Click="Layout_Click" Margin="0" />
                             </StackPanel>
-                        </Border>
-                    </StackPanel>
-                </ScrollViewer>
+                            <TextBlock Text="{l:T sources.title}" Style="{StaticResource SectionTitle}" Margin="0,0,0,2" />
+                        </DockPanel>
+                        <TextBlock DockPanel.Dock="Top" Text="{l:T sources.hint}" Style="{StaticResource Hint}" />
+                        <ListView x:Name="SourceList" ItemsSource="{Binding Sources}" SelectedItem="{Binding SelectedSource}" MouseDoubleClick="EditSource_Click">
+                            <ListView.View>
+                                <GridView>
+                                    <GridViewColumn Header="{l:T col.path}" Width="380">
+                                        <GridViewColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding Title}" FontFamily="Consolas" />
+                                            </DataTemplate>
+                                        </GridViewColumn.CellTemplate>
+                                    </GridViewColumn>
+                                    <GridViewColumn x:Name="FolderColumn" Header="{l:T col.folder}" Width="0" DisplayMemberBinding="{Binding Folder}" />
+                                    <GridViewColumn Header="{l:T col.account}" Width="200" DisplayMemberBinding="{Binding AccountText}" />
+                                </GridView>
+                            </ListView.View>
+                        </ListView>
+                    </DockPanel>
+
+                    <GridSplitter Grid.Row="2" HorizontalAlignment="Stretch" VerticalAlignment="Center" Height="4" Background="{StaticResource Border}" />
+
+                    <!-- Destinations -->
+                    <DockPanel Grid.Row="3">
+                        <DockPanel DockPanel.Dock="Top">
+                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                <Button Content="{l:T list.add}" Click="AddDestination_Click" Style="{StaticResource PrimaryButton}" />
+                                <Button Content="{l:T list.edit}" Click="EditDestination_Click" IsEnabled="{Binding SelectedDestination, Converter={x:Static l:NotNull.Instance}}" />
+                                <Button Content="{l:T list.remove}" Click="RemoveDestination_Click" IsEnabled="{Binding SelectedDestination, Converter={x:Static l:NotNull.Instance}}" Margin="0" />
+                            </StackPanel>
+                            <TextBlock Text="{l:T destinations.title}" Style="{StaticResource SectionTitle}" Margin="0,0,0,2" />
+                        </DockPanel>
+                        <TextBlock DockPanel.Dock="Top" Text="{l:T destinations.hint}" Style="{StaticResource Hint}" />
+                        <ListView ItemsSource="{Binding Destinations}" SelectedItem="{Binding SelectedDestination}" MouseDoubleClick="EditDestination_Click">
+                            <ListView.View>
+                                <GridView>
+                                    <GridViewColumn Header="{l:T col.path}" Width="380">
+                                        <GridViewColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding Title}" FontFamily="Consolas" />
+                                            </DataTemplate>
+                                        </GridViewColumn.CellTemplate>
+                                    </GridViewColumn>
+                                    <GridViewColumn Header="{l:T col.account}" Width="200" DisplayMemberBinding="{Binding AccountText}" />
+                                </GridView>
+                            </ListView.View>
+                        </ListView>
+                    </DockPanel>
+                </Grid>
             </TabItem>
 
-            <!-- 4. Mode -->
+            <!-- 2. Mode and options -->
             <TabItem>
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <ScrollViewer x:Name="OptionsScroll" VerticalScrollBarVisibility="Auto">
+                    <StackPanel>
                     <StackPanel Margin="24,18" MaxWidth="680" HorizontalAlignment="Left">
                         <TextBlock Text="{l:T step.mode}" Style="{StaticResource SectionTitle}" />
                         <TextBlock Text="{l:T mode.hint}" Style="{StaticResource Hint}" />
@@ -271,12 +172,7 @@
                             </RadioButton>
                         </Border>
                     </StackPanel>
-                </ScrollViewer>
-            </TabItem>
-
-            <!-- 5. Options -->
-            <TabItem>
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                
                     <StackPanel Margin="24,18" MaxWidth="680" HorizontalAlignment="Left">
                         <TextBlock Text="{l:T step.options}" Style="{StaticResource SectionTitle}" />
 
@@ -350,7 +246,7 @@
                             </StackPanel>
                         </Border>
 
-                        <Border Style="{StaticResource Card}">
+                        <Border x:Name="VersionsCard" Style="{StaticResource Card}">
                             <StackPanel>
                                 <TextBlock Text="{l:T options.versions}" FontWeight="SemiBold" FontSize="15" />
                                 <CheckBox x:Name="VersionsBox" Content="{l:T options.versions.keep}" IsChecked="{Binding KeepVersions}" Margin="0,10,0,0" FontWeight="SemiBold" />
@@ -360,6 +256,17 @@
                                     <TextBox Text="{Binding VersionRetentionDays}" Width="60" Margin="8,0,8,0" />
                                     <TextBlock Text="{l:T options.versions.days.hint}" VerticalAlignment="Center" Foreground="{StaticResource Muted}" />
                                 </StackPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- A full destination: make room before copying. -->
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="{l:T options.space}" FontWeight="SemiBold" FontSize="15" />
+                                <CheckBox Content="{l:T options.extrasfirst}" IsChecked="{Binding DeleteExtrasFirst}" Margin="0,10,0,0"
+                                          IsEnabled="{Binding CanDeleteExtrasFirst}" />
+                                <TextBlock Text="{l:T options.extrasfirst.hint}" Style="{StaticResource Hint}" Margin="20,2,0,4" />
+                                <TextBlock Text="{l:T options.space.versions}" Style="{StaticResource Hint}" />
                             </StackPanel>
                         </Border>
 
@@ -383,10 +290,12 @@
                             </StackPanel>
                         </Expander>
                     </StackPanel>
+                
+                    </StackPanel>
                 </ScrollViewer>
             </TabItem>
 
-            <!-- 6. Schedule -->
+            <!-- 3. Schedule -->
             <TabItem>
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="24,18" MaxWidth="640" HorizontalAlignment="Left">
@@ -444,10 +353,11 @@
                                   Visibility="{Binding ShowRunMissed, Converter={StaticResource BoolToVis}}" />
                         <TextBlock Text="{l:T schedule.service}" Style="{StaticResource Hint}" Margin="0,16,0,0" />
                     </StackPanel>
+                
                 </ScrollViewer>
             </TabItem>
 
-            <!-- 7. Summary -->
+            <!-- 4. Summary -->
             <TabItem>
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="24,18">
@@ -509,8 +419,9 @@
                             </CheckBox>
                         </Border>
                     </StackPanel>
+                
                 </ScrollViewer>
             </TabItem>
         </TabControl>
     </DockPanel>
-</Window>
+</UserControl>

@@ -23,21 +23,23 @@ public static class JobDescriber
 
         var sources = job.Sources;
         var src = string.Join(", ", sources.Select(x => PathUtil.NormalizeDir(x.Path)));
-        var dst = PathUtil.NormalizeDir(job.Destination.Path);
-        if (!job.MultiSource)
+        var dst = string.Join(", ", job.Destinations.Select(x => PathUtil.NormalizeDir(x.Path)));
+        if (job.MultiDestination) Add(SummaryLevel.Info, "sum.dests", job.Destinations.Count, dst);
+        for (var d = 0; d < job.Destinations.Count; d++)
         {
-            Add(SummaryLevel.Info, "sum.what", src, dst);
-        }
-        else
-        {
-            Add(SummaryLevel.Info, "sum.what.multi", sources.Count, dst);
+            var dest = PathUtil.NormalizeDir(job.Destinations[d].Path);
+            if (!job.MultiSource)
+            {
+                Add(SummaryLevel.Info, "sum.what", src, dest);
+                continue;
+            }
+            Add(SummaryLevel.Info, "sum.what.multi", sources.Count, dest);
             for (var i = 0; i < sources.Count; i++)
-                Add(SummaryLevel.Info, "sum.what.item", PathUtil.NormalizeDir(sources[i].Path), PathUtil.NormalizeDir(job.DestinationFor(i)));
+                Add(SummaryLevel.Info, "sum.what.item", PathUtil.NormalizeDir(sources[i].Path), PathUtil.NormalizeDir(job.DestinationFor(i, d)));
         }
-        // With several sources each mirror and each versions folder stays inside that source's folder.
-        var targets = job.MultiSource
-            ? string.Join(", ", sources.Select((_, i) => PathUtil.NormalizeDir(job.DestinationFor(i))))
-            : dst;
+        // Each mirror and each versions folder stays inside the folder of its source, in each destination.
+        var targetList = job.Pairs.Select(p => PathUtil.NormalizeDir(job.DestinationFor(p.Source, p.Destination))).ToList();
+        var targets = string.Join(", ", targetList);
 
         switch (job.Mode)
         {
@@ -51,11 +53,10 @@ public static class JobDescriber
                 Add(SummaryLevel.Danger, "sum.mode.mirror", targets, src);
                 break;
         }
+        if (job.Mode == CopyMode.Mirror && job.Options.DeleteExtrasFirst && !job.Options.KeepVersions) Add(SummaryLevel.Warning, "sum.extrasfirst");
         if (job.Options.KeepVersions)
         {
-            var folder = job.MultiSource
-                ? string.Join(", ", sources.Select((_, i) => Versions.Root(PathUtil.NormalizeDir(job.DestinationFor(i))) + "\\"))
-                : Versions.Root(dst) + "\\";
+            var folder = string.Join(", ", targetList.Select(t => Versions.Root(t) + "\\"));
             if (job.Options.VersionRetentionDays > 0) Add(SummaryLevel.Info, "sum.versions", folder, job.Options.VersionRetentionDays);
             else Add(SummaryLevel.Info, "sum.versions.forever", folder);
         }
@@ -78,12 +79,12 @@ public static class JobDescriber
         }
 
         foreach (var x in sources) AddEndpoint(x, "sum.net.source");
-        AddEndpoint(job.Destination, "sum.net.destination");
+        foreach (var x in job.Destinations) AddEndpoint(x, "sum.net.destination");
 
         var o = job.Options;
-        var sftp = sources.Any(x => x.IsSftp) || job.Destination.IsSftp;
+        var sftp = sources.Any(x => x.IsSftp) || job.Destinations.Any(x => x.IsSftp);
         if (sftp) Add(SummaryLevel.Warning, "sum.engine.sftp");
-        if (o.Compress) Add(SummaryLevel.Info, job.Destination.IsSftp ? "sum.compress.gz" : "sum.compress", Compression.Suffix);
+        if (o.Compress) Add(SummaryLevel.Info, job.Destinations.Any(x => x.IsSftp) ? "sum.compress.gz" : "sum.compress", Compression.Suffix);
         if (o.ExcludeFiles.Count > 0) Add(SummaryLevel.Info, "sum.xf", string.Join(", ", o.ExcludeFiles));
         if (o.ExcludeDirectories.Count > 0) Add(SummaryLevel.Info, "sum.xd", string.Join(", ", o.ExcludeDirectories));
         if (o.ExcludeOlder) Add(SummaryLevel.Info, "sum.xo");

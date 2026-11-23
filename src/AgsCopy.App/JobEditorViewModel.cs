@@ -75,6 +75,20 @@ public sealed class EndpointViewModel : ObservableObject
 
     private static string DefaultFolder(string path) => PathUtil.IsAbsolute(path) ? CopyJob.DefaultFolder(path) : "";
 
+    /// <summary>A copy to edit in a dialog, secrets typed in this session included; the original stays as it was until OK.</summary>
+    public EndpointViewModel Copy()
+    {
+        var c = new EndpointViewModel(ToEndpoint()) { Password = Password, _keyName = _keyName, _hasStoredKey = _hasStoredKey };
+        c._privateKey = _privateKey;
+        c._folder = _folder;
+        return c;
+    }
+
+    /// <summary>The account column of the lists.</summary>
+    public string AccountText => !IsRemote ? Loc.T("endpoint.account.local")
+        : _userName.Trim().Length == 0 ? Loc.T("endpoint.account.service")
+        : _userName.Trim();
+
     /// <summary>The row of the source list.</summary>
     public string Title => _path.Trim().Length == 0 ? Loc.T("sources.new") : PathUtil.NormalizeDir(_path);
 
@@ -233,7 +247,11 @@ public sealed class DayOption(DayOfWeek day, bool selected) : ObservableObject
 
 public sealed class JobEditorViewModel : ObservableObject
 {
-    public const int SummaryStep = 6;
+    /// <summary>Pages of a job: sources and destinations, mode and options, schedule, summary.</summary>
+    public const int EndpointsStep = 0;
+    public const int OptionsStep = 1;
+    public const int ScheduleStep = 2;
+    public const int SummaryStep = 3;
 
     private readonly CopyJob _original;
     private int _step;
@@ -260,14 +278,12 @@ public sealed class JobEditorViewModel : ObservableObject
         IsNew = isNew;
         _name = job.Name;
         _enabled = job.Enabled;
-        Sources = new ObservableCollection<EndpointViewModel>(job.Sources.Select(e => new EndpointViewModel(e)));
-        _selectedSource = Sources[0];
-        Sources.CollectionChanged += (_, _) =>
-        {
-            OnPropertyChanged(nameof(IsMultiSource));
-            OnPropertyChanged(nameof(CanRemoveSource));
-        };
-        Destination = new EndpointViewModel(job.Destination);
+        // A new job starts with empty lists: its blank endpoints are not shown.
+        Sources = new ObservableCollection<EndpointViewModel>(job.Sources.Where(e => e.Path.Trim().Length > 0).Select(e => new EndpointViewModel(e)));
+        Destinations = new ObservableCollection<EndpointViewModel>(job.Destinations.Where(e => e.Path.Trim().Length > 0).Select(e => new EndpointViewModel(e)));
+        Sources.CollectionChanged += (_, _) => OnPropertyChanged(nameof(IsMultiSource));
+        Destinations.CollectionChanged += (_, _) => OnPropertyChanged(nameof(IsMultiDestination));
+        _deleteExtrasFirst = job.Options.DeleteExtrasFirst;
         _mode = job.Mode;
 
         var o = job.Options;
@@ -302,8 +318,17 @@ public sealed class JobEditorViewModel : ObservableObject
         IntervalMinutes = s.IntervalMinutes;
         RunMissed = s.RunMissed;
 
-        Steps = ["step.general", "step.source", "step.destination", "step.mode", "step.options", "step.schedule", "step.summary"];
+        Steps = ["page.endpoints", "page.options", "page.schedule", "page.summary"];
+        _baseline = System.Text.Json.JsonSerializer.Serialize(ToJob(), Json.Options);
     }
+
+    private string _baseline;
+
+    /// <summary>The job differs from the one loaded (or last saved).</summary>
+    public bool IsDirty => IsNew || System.Text.Json.JsonSerializer.Serialize(ToJob(), Json.Options) != _baseline;
+
+    /// <summary>After a save, the job as saved is the new starting point.</summary>
+    public void MarkSaved() => _baseline = System.Text.Json.JsonSerializer.Serialize(ToJob(), Json.Options);
 
     public bool IsNew { get; }
     public Guid JobId => _original.Id;
@@ -333,40 +358,60 @@ public sealed class JobEditorViewModel : ObservableObject
     public bool Enabled { get => _enabled; set => Set(ref _enabled, value); }
 
     // Endpoints
-    /// <summary>The sources; with more than one, each goes into its own folder of the destination.</summary>
+    /// <summary>The sources; with more than one, each goes into its own folder of each destination.</summary>
     public ObservableCollection<EndpointViewModel> Sources { get; }
 
-    private EndpointViewModel _selectedSource;
+    /// <summary>The destinations; each run copies every source into each of them.</summary>
+    public ObservableCollection<EndpointViewModel> Destinations { get; }
 
-    /// <summary>The source shown for editing.</summary>
-    public EndpointViewModel SelectedSource
+    private EndpointViewModel? _selectedSource;
+    private EndpointViewModel? _selectedDestination;
+
+    public EndpointViewModel? SelectedSource
     {
         get => _selectedSource;
-        set
-        {
-            if (value != null) Set(ref _selectedSource, value);
-        }
+        set => Set(ref _selectedSource, value);
     }
 
-    public int SelectedSourceIndex => Math.Max(0, Sources.IndexOf(_selectedSource));
+    public EndpointViewModel? SelectedDestination
+    {
+        get => _selectedDestination;
+        set => Set(ref _selectedDestination, value);
+    }
+
     public bool IsMultiSource => Sources.Count > 1;
-    public bool CanRemoveSource => Sources.Count > 1;
+    public bool IsMultiDestination => Destinations.Count > 1;
 
-    public void AddSource()
+    public bool IsDestination(EndpointViewModel e) => Destinations.Contains(e);
+
+    /// <summary>Adds an endpoint, or puts an edited copy in place of the one it was made from.</summary>
+    public void Put(ObservableCollection<EndpointViewModel> list, EndpointViewModel? original, EndpointViewModel edited)
     {
-        var e = new EndpointViewModel(new JobEndpoint());
-        Sources.Add(e);
-        SelectedSource = e;
+        var i = original == null ? -1 : list.IndexOf(original);
+        if (i >= 0) list[i] = edited;
+        else list.Add(edited);
+        if (ReferenceEquals(list, Sources)) SelectedSource = edited;
+        else SelectedDestination = edited;
     }
 
-    public void RemoveSource()
+    public void Remove(ObservableCollection<EndpointViewModel> list, EndpointViewModel e)
     {
-        if (Sources.Count <= 1) return;
-        var i = SelectedSourceIndex;
-        Sources.RemoveAt(i);
-        SelectedSource = Sources[Math.Min(i, Sources.Count - 1)];
+        var i = list.IndexOf(e);
+        if (i < 0) return;
+        list.RemoveAt(i);
+        var next = list.Count == 0 ? null : list[Math.Min(i, list.Count - 1)];
+        if (ReferenceEquals(list, Sources)) SelectedSource = next;
+        else SelectedDestination = next;
     }
-    public EndpointViewModel Destination { get; }
+
+    private bool _deleteExtrasFirst;
+
+    /// <summary>Mirror without versions: delete the extras before copying, for a full destination.</summary>
+    public bool DeleteExtrasFirst
+    {
+        get => _deleteExtrasFirst;
+        set => Set(ref _deleteExtrasFirst, value);
+    }
 
     // Mode
     public CopyMode Mode
@@ -378,6 +423,7 @@ public sealed class JobEditorViewModel : ObservableObject
             OnPropertyChanged(nameof(ModeCopy));
             OnPropertyChanged(nameof(ModeMirror));
             OnPropertyChanged(nameof(DeletesFiles));
+            OnPropertyChanged(nameof(CanDeleteExtrasFirst));
             DeletionConfirmed = false;
             Preview = null;
         }
@@ -386,6 +432,9 @@ public sealed class JobEditorViewModel : ObservableObject
     public bool ModeCopy { get => _mode == CopyMode.Copy; set { if (value) Mode = CopyMode.Copy; } }
     public bool ModeMirror { get => _mode == CopyMode.Mirror; set { if (value) Mode = CopyMode.Mirror; } }
     public bool DeletesFiles => _mode != CopyMode.Copy;
+
+    /// <summary>Only a mirror deletes extras, and with versions they are kept, not deleted.</summary>
+    public bool CanDeleteExtrasFirst => _mode == CopyMode.Mirror && !_keepVersions;
 
     // Options
     public int Threads
@@ -429,7 +478,9 @@ public sealed class JobEditorViewModel : ObservableObject
         get => _keepVersions;
         set
         {
-            if (Set(ref _keepVersions, value)) OnPropertyChanged(nameof(MirrorVersionsNote));
+            if (!Set(ref _keepVersions, value)) return;
+            OnPropertyChanged(nameof(MirrorVersionsNote));
+            OnPropertyChanged(nameof(CanDeleteExtrasFirst));
         }
     }
 
@@ -556,11 +607,14 @@ public sealed class JobEditorViewModel : ObservableObject
         var job = Json.Clone(_original);
         job.Name = _name.Trim();
         job.Enabled = _enabled;
-        var sources = Sources.Select(s => s.ToEndpoint()).ToList();
+        var sources = Sources.Select(s => s.ToEndpoint()).DefaultIfEmpty(new JobEndpoint()).ToList();
         job.Source = sources[0];
         job.ExtraSources = sources.Skip(1).ToList();
         if (sources.Count == 1) job.Source.Folder = null;
-        job.Destination = Destination.ToEndpoint();
+        var destinations = Destinations.Select(d => d.ToEndpoint()).DefaultIfEmpty(new JobEndpoint()).ToList();
+        foreach (var d in destinations) d.Folder = null;
+        job.Destination = destinations[0];
+        job.ExtraDestinations = destinations.Skip(1).ToList();
         job.Mode = _mode;
         job.DeletionConfirmed = _deletionConfirmed;
 
@@ -578,6 +632,7 @@ public sealed class JobEditorViewModel : ObservableObject
         o.VersionRetentionDays = VersionRetentionDays;
         o.ExcludeOlder = ExcludeOlder;
         o.SkipJunctions = SkipJunctions;
+        o.DeleteExtrasFirst = _deleteExtrasFirst;
         o.FollowShareJunctions = FollowShareJunctions;
         o.FatFileTimes = FatFileTimes;
         o.FileProperties = (FileProperties)_fileProperties;

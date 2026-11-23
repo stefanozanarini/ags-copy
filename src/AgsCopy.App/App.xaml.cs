@@ -7,6 +7,8 @@ namespace AgsCopy.App;
 /// AGS-Copy.exe            configuration window (relaunches itself elevated)
 /// AGS-Copy.exe --tray     tray icon, unelevated, started at logon
 /// AGS-Copy.exe --run ID   asks the service to run a job now, then exits
+/// AGS-Copy.exe --selftest LOG   opens every window and page against the running service, writes
+///                               what went wrong to LOG and exits with 1 if anything did (CI)
 /// The portable build only has the configuration window, with the engine inside it.
 /// </summary>
 public partial class App : Application
@@ -37,6 +39,12 @@ public partial class App : Application
         if (args.Length >= 2 && args[0].Equals("--run", StringComparison.OrdinalIgnoreCase) && Guid.TryParse(args[1], out var id))
         {
             _ = RunJobAndExitAsync(id);
+            return;
+        }
+
+        if (args.Length >= 1 && args[0].Equals("--selftest", StringComparison.OrdinalIgnoreCase))
+        {
+            _ = SelfTestAsync(args.Length > 1 ? args[1] : null);
             return;
         }
 
@@ -97,6 +105,46 @@ public partial class App : Application
         if (created) return true;
         Shutdown();
         return false;
+    }
+
+    /// <summary>
+    /// The end-to-end test's look at the GUI: a XAML mistake only shows when a window loads, so every
+    /// window and every page of a job is loaded once. Messages that would wait for a click are logged instead.
+    /// </summary>
+    private async Task SelfTestAsync(string? logFile)
+    {
+        var problems = new List<string>();
+        Ui.Silent = message => problems.Add("Message: " + message);
+        DispatcherUnhandledException += (_, e) =>
+        {
+            problems.Add("Unhandled: " + e.Exception);
+            e.Handled = true;
+        };
+        ShutdownMode = ShutdownMode.OnExplicitShutdown;
+        var log = new List<string>();
+        try
+        {
+            var main = new MainWindow();
+            MainWindow = main;
+            main.Show();
+            await main.SelfTestAsync(log.Add);
+            main.Close();
+        }
+        catch (Exception ex)
+        {
+            problems.Add("Failed: " + ex);
+        }
+        if (logFile != null)
+        {
+            try
+            {
+                File.WriteAllLines(logFile, log.Concat(problems));
+            }
+            catch (IOException)
+            {
+            }
+        }
+        Shutdown(problems.Count == 0 ? 0 : 1);
     }
 
     private async Task RunJobAndExitAsync(Guid id)

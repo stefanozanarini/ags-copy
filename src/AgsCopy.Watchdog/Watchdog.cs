@@ -26,6 +26,7 @@ public sealed class Watchdog(ILogger<Watchdog> log) : BackgroundService
             try
             {
                 var health = await ProbeAsync(ct);
+                if (health == ServiceHealth.Healthy) await ResumeAsync(ct);
                 switch (_policy.Next(health))
                 {
                     case WatchdogAction.Start:
@@ -72,6 +73,23 @@ public sealed class Watchdog(ILogger<Watchdog> log) : BackgroundService
         catch (Exception) when (!ct.IsCancellationRequested)
         {
             return ServiceHealth.Unresponsive;
+        }
+    }
+
+    /// <summary>
+    /// Asks the service to run again the jobs a crash cut short (it knows which: their last run was
+    /// still marked as running when it started).
+    /// </summary>
+    private async Task ResumeAsync(CancellationToken ct)
+    {
+        try
+        {
+            var started = await PipeClient.CallAsync<int>(Commands.ResumeJobs, timeout: TimeSpan.FromSeconds(30), ct: ct);
+            if (started > 0) log.LogWarning("{Count} job(s) cut short by a crash of {Service} started again.", started, AppPaths.ServiceName);
+        }
+        catch (Exception e) when (!ct.IsCancellationRequested)
+        {
+            log.LogWarning(e, "Cannot ask {Service} to resume interrupted jobs.", AppPaths.ServiceName);
         }
     }
 

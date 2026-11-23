@@ -101,17 +101,38 @@ public static class Elevation
 
 public static class Ui
 {
+    /// <summary>Self-test: messages go here instead of a message box, and questions answer yes.</summary>
+    public static Action<string>? Silent { get; set; }
+
     public static void Error(Window? owner, Exception e) => Error(owner, Describe(e));
 
     public static void Error(Window? owner, string message)
     {
+        if (Silent != null)
+        {
+            Silent(message);
+            return;
+        }
         if (owner != null) MessageBox.Show(owner, message, "AGS-Copy", MessageBoxButton.OK, MessageBoxImage.Warning);
         else MessageBox.Show(message, "AGS-Copy", MessageBoxButton.OK, MessageBoxImage.Warning);
     }
 
     public static bool Confirm(Window owner, string message, bool danger = false) =>
+        Silent != null ||
         MessageBox.Show(owner, message, "AGS-Copy", MessageBoxButton.YesNo, danger ? MessageBoxImage.Warning : MessageBoxImage.Question, MessageBoxResult.No)
         == MessageBoxResult.Yes;
+
+    /// <summary>The first element of a type in a visual tree (for controls that cannot be bound, like PasswordBox).</summary>
+    public static T? FindChild<T>(DependencyObject parent) where T : DependencyObject
+    {
+        for (var i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            var child = System.Windows.Media.VisualTreeHelper.GetChild(parent, i);
+            if (child is T found) return found;
+            if (FindChild<T>(child) is { } deeper) return deeper;
+        }
+        return null;
+    }
 
     public static string Describe(Exception e) => e switch
     {
@@ -119,6 +140,15 @@ public static class Ui
         OperationCanceledException => Loc.T("err.timeout"),
         _ => e.Message,
     };
+}
+
+public sealed class NotNull : System.Windows.Data.IValueConverter
+{
+    public static readonly NotNull Instance = new();
+
+    public object Convert(object value, Type targetType, object parameter, System.Globalization.CultureInfo culture) => value != null;
+
+    public object ConvertBack(object value, Type targetType, object parameter, System.Globalization.CultureInfo culture) => throw new NotSupportedException();
 }
 
 public sealed class Not : System.Windows.Data.IValueConverter

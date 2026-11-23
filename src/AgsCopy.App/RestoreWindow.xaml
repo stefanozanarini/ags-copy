@@ -15,6 +15,11 @@
             <StackPanel>
                 <TextBlock x:Name="Heading" Style="{StaticResource SectionTitle}" />
                 <TextBlock Text="{l:T restore.hint}" Style="{StaticResource Hint}" />
+                <!-- A job with several destinations: each holds its own copy and versions. -->
+                <StackPanel x:Name="DestinationPanel" Visibility="Collapsed">
+                    <TextBlock Text="{l:T restore.destination}" Style="{StaticResource FieldLabel}" />
+                    <ComboBox x:Name="DestinationBox" SelectionChanged="Destination_Changed" Width="420" HorizontalAlignment="Left" FontFamily="Consolas" />
+                </StackPanel>
                 <TextBlock Text="{l:T restore.point}" Style="{StaticResource FieldLabel}" />
                 <ComboBox x:Name="PointBox" DisplayMemberPath="Text" SelectionChanged="Point_Changed" Width="420" HorizontalAlignment="Left" />
                 <TextBlock Text="{l:T restore.point.hint}" Style="{StaticResource Hint}" />

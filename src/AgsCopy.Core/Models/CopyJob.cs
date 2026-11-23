@@ -36,7 +36,12 @@ public sealed class CopyJob
     /// </summary>
     public List<JobEndpoint> ExtraSources { get; set; } = [];
 
+    /// <summary>The first (often the only) destination.</summary>
     public JobEndpoint Destination { get; set; } = new();
+
+    /// <summary>Further destinations: each run copies every source into each of them, one after the other.</summary>
+    public List<JobEndpoint> ExtraDestinations { get; set; } = [];
+
     public CopyMode Mode { get; set; } = CopyMode.Copy;
     public CopyOptions Options { get; set; } = new();
     public Schedule Schedule { get; set; } = new();
@@ -58,26 +63,52 @@ public sealed class CopyJob
     [JsonIgnore]
     public bool MultiSource => ExtraSources.Count > 0;
 
+    [JsonIgnore]
+    public IReadOnlyList<JobEndpoint> Destinations => [Destination, .. ExtraDestinations];
+
+    [JsonIgnore]
+    public bool MultiDestination => ExtraDestinations.Count > 0;
+
+    /// <summary>For lists: the first destination, and how many more there are.</summary>
+    [JsonIgnore]
+    public string DestinationSummary => MultiDestination ? $"{Destination.Path} (+{ExtraDestinations.Count})" : Destination.Path;
+
     /// <summary>For lists: the first source, and how many more there are.</summary>
     [JsonIgnore]
     public string SourceSummary => MultiSource ? $"{Source.Path} (+{ExtraSources.Count})" : Source.Path;
 
-    /// <summary>Where source <paramref name="index"/> goes: the destination, or its own folder in it.</summary>
-    public string DestinationFor(int index) => MultiSource
-        ? PathUtil.Combine(Destination.Path, Sources[index].Folder ?? "")
-        : Destination.Path;
+    /// <summary>Where source <paramref name="index"/> goes in a destination: the destination itself, or its own folder in it.</summary>
+    public string DestinationFor(int index, int destination = 0) => MultiSource
+        ? PathUtil.Combine(Destinations[destination].Path, Sources[index].Folder ?? "")
+        : Destinations[destination].Path;
 
     /// <summary>
-    /// The job reduced to one of its sources, copied into <see cref="DestinationFor"/>: that is how a
-    /// run, a preview and a restore handle each source.
+    /// The job reduced to one source and one destination, copied into <see cref="DestinationFor"/>:
+    /// that is how a run, a preview and a restore handle each pair.
     /// </summary>
-    public CopyJob ForSource(int index)
+    public CopyJob ForSource(int index, int destination = 0)
     {
         var j = Json.Clone(this);
         j.Source = j.Sources[index];
         j.ExtraSources = [];
-        j.Destination.Path = DestinationFor(index);
+        j.Destination = j.Destinations[destination];
+        j.ExtraDestinations = [];
+        j.Destination.Path = DestinationFor(index, destination);
         return j;
+    }
+
+    /// <summary>Every (source, destination) pair of a run, destination by destination.</summary>
+    [JsonIgnore]
+    public IEnumerable<(int Source, int Destination)> Pairs =>
+        Enumerable.Range(0, Destinations.Count).SelectMany(d => Enumerable.Range(0, Sources.Count).Select(i => (i, d)));
+
+    /// <summary>"[→ E:\Backup · Data] " in notes and logs, when the job has more than one of either.</summary>
+    public string PairLabel(int source, int destination)
+    {
+        var parts = new List<string>();
+        if (MultiDestination) parts.Add("→ " + PathUtil.NormalizeDir(Destinations[destination].Path));
+        if (MultiSource) parts.Add(Sources[source].Folder ?? "");
+        return parts.Count == 0 ? "" : $"[{string.Join(" · ", parts)}] ";
     }
 
     /// <summary>Default folder for a source: its last folder name (the server for a share root, "root" for a drive).</summary>
@@ -197,6 +228,12 @@ public sealed class CopyOptions
     /// destination supports it, otherwise each such file is written as name.gz.
     /// </summary>
     public bool Compress { get; set; }
+
+    /// <summary>
+    /// Mirror without versions: the extras are deleted before the copy instead of after it, so a full
+    /// destination has room for the new files.
+    /// </summary>
+    public bool DeleteExtrasFirst { get; set; }
 
     /// <summary>/ZB — restartable mode, falling back to backup mode on access denied.</summary>
     public bool BackupMode { get; set; }

@@ -14,8 +14,22 @@ public static class JobValidator
 
         if (string.IsNullOrWhiteSpace(job.Name)) errors.Add(T("val.name"));
 
-        var dst = job.Destination.Path;
-        if (!PathUtil.IsAbsolute(dst)) errors.Add(T("val.destination"));
+        var destinations = job.Destinations;
+        for (var d = 0; d < destinations.Count; d++)
+        {
+            var dst = destinations[d].Path;
+            if (!PathUtil.IsAbsolute(dst))
+            {
+                errors.Add(job.MultiDestination ? Loc.Fl(lang, "val.destination.n", d + 1) : T("val.destination"));
+                continue;
+            }
+            // One destination inside another: a mirror into the outer one would take the inner for extras.
+            for (var e = 0; e < d; e++)
+                if (PathUtil.IsAbsolute(destinations[e].Path) && PathUtil.Overlaps(dst, destinations[e].Path))
+                    errors.Add(Loc.Fl(lang, "val.destinations.overlap", destinations[e].Path, dst));
+            CheckCredential(destinations[d], T("val.cred.destination"));
+            CheckSftp(destinations[d], "destination");
+        }
         var sources = job.Sources;
         for (var i = 0; i < sources.Count; i++)
         {
@@ -25,8 +39,11 @@ public static class JobValidator
                 errors.Add(job.MultiSource ? Loc.Fl(lang, "val.source.n", i + 1) : T("val.source"));
                 continue;
             }
-            if (PathUtil.IsAbsolute(dst) && PathUtil.Overlaps(src, dst))
-                errors.Add(job.MultiSource ? Loc.Fl(lang, "val.overlap.n", src) : T("val.overlap"));
+            foreach (var dst in destinations.Select(x => x.Path).Where(PathUtil.IsAbsolute))
+                if (PathUtil.Overlaps(src, dst))
+                    errors.Add(job.MultiDestination ? Loc.Fl(lang, "val.overlap.pair", src, dst)
+                        : job.MultiSource ? Loc.Fl(lang, "val.overlap.n", src)
+                        : T("val.overlap"));
             // One source inside another would be copied twice, and two mirrors would fight over it.
             for (var j = 0; j < i; j++)
                 if (PathUtil.IsAbsolute(sources[j].Path) && PathUtil.Overlaps(src, sources[j].Path))
@@ -36,14 +53,13 @@ public static class JobValidator
         }
         if (job.MultiSource) CheckFolders();
 
-        CheckCredential(job.Destination, T("val.cred.destination"));
-        CheckSftp(job.Destination, "destination");
+        CheckSameServer();
 
         var o = job.Options;
         if (o.Threads is < 1 or > CopyOptions.MaxThreads) errors.Add(Loc.Fl(lang, "val.threads", CopyOptions.MaxThreads));
         if (o.Processes is < 1 or > CopyOptions.MaxProcesses) errors.Add(Loc.Fl(lang, "val.processes", CopyOptions.MaxProcesses));
         if (o.Retries < 0 || o.RetryWaitSeconds < 0) errors.Add(T("val.retries"));
-        if ((sources.Any(x => x.IsSftp) || job.Destination.IsSftp) && !string.IsNullOrWhiteSpace(o.ExtraArguments)) errors.Add(T("val.sftpargs"));
+        if ((sources.Any(x => x.IsSftp) || destinations.Any(x => x.IsSftp)) && !string.IsNullOrWhiteSpace(o.ExtraArguments)) errors.Add(T("val.sftpargs"));
         if (RobocopyArgs.SourceWritingSwitches(o.ExtraArguments) is { Count: > 0 } forbidden)
             errors.Add(Loc.Fl(lang, "val.sourcewrite", string.Join(' ', forbidden)));
 
@@ -66,6 +82,20 @@ public static class JobValidator
             if (c.UserName.Length > 0 && !(e.IsSftp && c.UsesKey)
                 && string.IsNullOrEmpty(c.Password) && !c.HasPassword && string.IsNullOrEmpty(c.ProtectedPassword))
                 errors.Add(message);
+        }
+
+        // Windows keeps one identity per server for the whole session: a second share of the same server
+        // with another user fails with error 1219 when the job runs. Name and IP count as two servers.
+        void CheckSameServer()
+        {
+            var byServer = sources.Concat(destinations)
+                .Where(e => e.IsNetwork && e.HasCredential && PathUtil.Server(e.Path) != null)
+                .GroupBy(e => PathUtil.Server(e.Path)!, StringComparer.OrdinalIgnoreCase);
+            foreach (var g in byServer)
+            {
+                var users = g.Select(e => e.Credential!.UserName.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                if (users.Count > 1) errors.Add(Loc.Fl(lang, "val.sameserver", g.Key, string.Join(", ", users)));
+            }
         }
 
         // Each source in a folder of its own: a plain name, not the versions folder, not used twice.

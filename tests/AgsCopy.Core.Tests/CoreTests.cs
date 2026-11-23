@@ -197,7 +197,7 @@ public class LocalizationTests
     {
         var root = RepoRoot();
         var used = new HashSet<string>();
-        var literal = new Regex("\"((?:rep|val|sum|sched|prev|preview|err|test|log|tray|main|editor|endpoint|general|source|destination|mode|options|props|kind|schedule|summary|step|history|col|outcome|trigger|run|update|layout|portable|options|restore|sources)\\.[A-Za-z0-9_.]*[A-Za-z0-9_])\"");
+        var literal = new Regex("\"((?:rep|val|sum|sched|prev|preview|err|test|log|tray|main|editor|endpoint|general|source|destination|mode|options|props|kind|schedule|summary|step|history|col|outcome|trigger|run|update|layout|portable|options|restore|sources|destinations|list|page)\\.[A-Za-z0-9_.]*[A-Za-z0-9_])\"");
         var markup = new Regex(@"\{l:T ([A-Za-z0-9_.]+)\}");
         foreach (var file in Directory.EnumerateFiles(Path.Combine(root, "src"), "*.*", SearchOption.AllDirectories))
         {

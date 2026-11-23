@@ -101,7 +101,7 @@ public sealed class ReportStore
                 JobName = j.Name,
                 Mode = j.Mode,
                 Source = j.SourceSummary,
-                Destination = j.Destination.Path,
+                Destination = j.DestinationSummary,
                 Enabled = j.Enabled,
                 Schedule = WithLanguage(() => JobDescriber.DescribeSchedule(j.Schedule)),
                 Folder = j.Id.ToString("N"),
