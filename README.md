@@ -124,6 +124,15 @@ through AGS-Copy's own copy engine. The interface is in Italian (default) and En
   the `robocopy /L` pass of versions (or extras deleted first) has given the totals. The copy
   engine plans everything first and always shows a percentage. The tray tooltip shows the
   percentage, or the bytes copied.
+- **Activity** (*Activity…* in the main window, while a job runs), refreshed every second: what
+  the run is preparing (network connections, shadow copy, link lookup), how far each walk for links
+  is (folders read, links found, also while it goes on alongside the copy), each robocopy process
+  with its state (listing, versions, copying, done and exit code), files, data, errors and the file
+  it is on, and robocopy's latest 500 lines.
+- **A busy service**: when the service runs but does not answer within a few seconds, the main
+  window says so instead of reporting it stopped; copies go on. The service keeps threads to spare
+  for the window (its link walks use threads of their own), and the watchdog restarts it only after
+  minutes without an answer.
 - **Two modes**:
   - *Copy* (`/E`) never deletes anything.
   - *Mirror* (`/MIR`) deletes destination items the source no longer has. It is shown in red
@@ -261,7 +270,8 @@ which runs only on Windows: `build\package.ps1 [-Version x.y.z]` gives
     extras deleted before the copy, nested destinations refused, and a restore from the second
     destination;
   - stops the service and waits for the watchdog to restart it;
-  - kills the service during a run, checks that robocopy died with it, and waits for the
+  - checks the activity of a running job (the process copying and its file, robocopy's lines),
+    then kills the service during that run, checks that robocopy died with it, and waits for the
     watchdog to bring the service back and run the job again to the end;
   - uninstalls.
 

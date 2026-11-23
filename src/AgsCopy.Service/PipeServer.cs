@@ -168,6 +168,9 @@ public sealed class PipeServer(
                     throw new ServiceException(Loc.Tl(lang, "err.running"));
                 return null;
 
+            case Commands.JobActivity:
+                return executor.Running(P<IdRequest>().Id)?.Snapshot() ?? new JobActivity();
+
             case Commands.CancelJob:
                 executor.Cancel(P<IdRequest>().Id);
                 return null;

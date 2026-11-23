@@ -296,7 +296,11 @@ $cjob = Call 'jobs.save' @{
 }
 Call 'jobs.run' @{ id = $cjob.id } | Out-Null
 WaitFor { (JobStatus $cjob.id).running } 60 'the job to start' | Out-Null
-Start-Sleep -Seconds 1
+# The activity window's view of the run: the process copying, the file it is on, robocopy's lines.
+WaitFor { $a = Call 'jobs.activity' @{ id = $cjob.id }; @($a.processes | Where-Object { $_.state -eq 'Copying' -and $_.current }).Count -gt 0 } 30 'a copying process in the activity' | Out-Null
+$activity = Call 'jobs.activity' @{ id = $cjob.id }
+$copying = @($activity.processes | Where-Object { $_.state -eq 'Copying' })
+Check ($activity.running -and $copying.Count -eq 1 -and $copying[0].current -like '*\d*\f*.txt' -and $activity.lines.Count -gt 0) "activity shows the copy: $($copying[0].current), $($activity.files) files, $($activity.lines.Count) lines"
 $svcPid = (Get-CimInstance Win32_Service -Filter "Name='AGS-Copy'").ProcessId
 Stop-Process -Id $svcPid -Force
 Start-Sleep -Seconds 3

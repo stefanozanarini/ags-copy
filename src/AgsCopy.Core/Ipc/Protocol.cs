@@ -40,6 +40,8 @@ public static class Commands
     public const string RestoreCancel = "restore.cancel";
     /// <summary>Starts the runs a crash cut short (the watchdog asks at every check); returns how many.</summary>
     public const string ResumeJobs = "jobs.resume";
+    /// <summary>What a running job is doing right now: its phase, its processes, the latest lines.</summary>
+    public const string JobActivity = "jobs.activity";
 
     public static bool IsReadOnly(string command) => command is Status or ListJobs or History;
 }
@@ -209,4 +211,61 @@ public sealed class JobStatus
 
     public DateTime? NextRunLocal { get; set; }
     public RunRecord? LastRun { get; set; }
+}
+
+/// <summary>What a running job is doing right now, for the activity window.</summary>
+public sealed class JobActivity
+{
+    public bool Running { get; set; }
+    public DateTime? StartedUtc { get; set; }
+    /// <summary>Before the copy: what is being prepared (a <c>activity.phase.*</c> key); null once copying.</summary>
+    public string? Phase { get; set; }
+    /// <summary>A share, a volume or a folder the phase is about.</summary>
+    public string? PhaseDetail { get; set; }
+    public long Files { get; set; }
+    public long Bytes { get; set; }
+    public long TotalFiles { get; set; }
+    public long TotalBytes { get; set; }
+    public bool TotalsKnown { get; set; }
+    public List<WalkActivity> Walks { get; set; } = [];
+    public List<ProcessActivity> Processes { get; set; } = [];
+    /// <summary>The latest output lines, oldest first.</summary>
+    public List<string> Lines { get; set; } = [];
+}
+
+public enum ProcessState
+{
+    Waiting,
+    /// <summary>robocopy /L over the process's part, for versions or extras deleted first.</summary>
+    Listing,
+    /// <summary>Moving to the versions or deleting extras, before copying.</summary>
+    Preparing,
+    Copying,
+    Done,
+}
+
+/// <summary>One robocopy process (or the copy engine) of a running job.</summary>
+public sealed class ProcessActivity
+{
+    public string Label { get; set; } = "";
+    public string Source { get; set; } = "";
+    public string Destination { get; set; } = "";
+    public ProcessState State { get; set; }
+    /// <summary>The last file or folder it reported.</summary>
+    public string? Current { get; set; }
+    public long Files { get; set; }
+    public long Bytes { get; set; }
+    public long Errors { get; set; }
+    public DateTime? StartedUtc { get; set; }
+    public DateTime? EndedUtc { get; set; }
+    public int? ExitCode { get; set; }
+}
+
+/// <summary>The walk of a share looking for links, which may go on while the copy runs.</summary>
+public sealed class WalkActivity
+{
+    public string Source { get; set; } = "";
+    public long Folders { get; set; }
+    public int Links { get; set; }
+    public bool Done { get; set; }
 }

@@ -40,6 +40,85 @@ public sealed class RunningJob
     {
         get { lock (Counters) return Counters.Sum(c => c.Bytes); }
     }
+
+    // What the activity window shows: written by the run's threads, copied out under the locks.
+    public const int MaxLines = 500;
+    private readonly List<(ProcessActivity Info, ProgressCounter Counter)> _processes = [];
+    private readonly List<(string Source, WalkProgress Progress)> _walks = [];
+    private readonly Queue<string> _lines = new();
+    private string? _phase;
+    private string? _phaseDetail;
+
+    /// <summary>What the run is preparing (an <c>activity.phase.*</c> key); null once it copies.</summary>
+    public void SetPhase(string? key, string? detail = null)
+    {
+        lock (_lines)
+        {
+            _phase = key;
+            _phaseDetail = detail;
+        }
+    }
+
+    public ProcessActivity AddProcess(string label, string source, string destination, ProgressCounter counter)
+    {
+        var p = new ProcessActivity { Label = label, Source = source, Destination = destination };
+        lock (_processes) _processes.Add((p, counter));
+        return p;
+    }
+
+    public WalkProgress AddWalk(string source)
+    {
+        var w = new WalkProgress();
+        lock (_walks) _walks.Add((source, w));
+        return w;
+    }
+
+    public void Line(string? line)
+    {
+        if (string.IsNullOrWhiteSpace(line)) return;
+        lock (_lines)
+        {
+            _lines.Enqueue(line.TrimEnd());
+            while (_lines.Count > MaxLines) _lines.Dequeue();
+        }
+    }
+
+    public JobActivity Snapshot()
+    {
+        var a = new JobActivity
+        {
+            Running = true,
+            StartedUtc = Record.StartUtc,
+            Files = Files,
+            Bytes = Bytes,
+            TotalFiles = TotalFiles,
+            TotalBytes = TotalBytes,
+            TotalsKnown = TotalsKnown,
+        };
+        lock (_lines)
+        {
+            a.Phase = _phase;
+            a.PhaseDetail = _phaseDetail;
+            a.Lines = [.. _lines];
+        }
+        lock (_walks)
+            a.Walks = _walks.Select(w => new WalkActivity { Source = w.Source, Folders = w.Progress.Folders, Links = w.Progress.Links, Done = w.Progress.Done }).ToList();
+        lock (_processes)
+        {
+            foreach (var (p, c) in _processes)
+            {
+                lock (p)
+                {
+                    a.Processes.Add(new ProcessActivity
+                    {
+                        Label = p.Label, Source = p.Source, Destination = p.Destination, State = p.State, Current = p.Current,
+                        Files = c.Files, Bytes = c.Bytes, Errors = p.Errors, StartedUtc = p.StartedUtc, EndedUtc = p.EndedUtc, ExitCode = p.ExitCode,
+                    });
+                }
+            }
+        }
+        return a;
+    }
 }
 
 /// <summary>Runs, previews and checks jobs.</summary>
@@ -172,6 +251,7 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
         using var walks = CancellationTokenSource.CreateLinkedTokenSource(ct);
         try
         {
+            rj.SetPhase("activity.phase.connect");
             leases.AddRange(Connect(job, null, null));
 
             // Every source is prepared and scanned for every destination first, so the progress bar knows
@@ -202,6 +282,7 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
             // The copy engine plans everything first; robocopy runs learn their totals as they go.
             rj.TotalsKnown = runs.All(r => r.Plan != null);
             rj.Scanning = false;
+            rj.SetPhase(null);
 
             foreach (var run in runs)
             {
@@ -411,17 +492,31 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
             var follow = part.Options.FollowsJunctionsOn(part.Source);
             try
             {
+                rj.SetPhase("activity.phase.links", src);
                 if (follow && !UsesEngine(part, dst, lang, out _))
                 {
                     // The walk of the whole share goes on while the copy runs.
                     found.Links = await Task.Run(() => QuickLinks(part.Id, src, exclusions, ct), ct);
-                    found.Walk = Task.Run(() => DfsClient.FindLinks(src, exclusions, true, found.WalkToken), found.WalkToken);
+                    var progress = rj.AddWalk(src);
+                    found.Walk = Task.Run(() =>
+                    {
+                        try
+                        {
+                            return DfsClient.FindLinks(src, exclusions, true, found.WalkToken, progress);
+                        }
+                        finally
+                        {
+                            progress.Done = true;
+                        }
+                    }, found.WalkToken);
                     log.LogInformation("Source {Source}: copying with {Count} known links while the share is walked", src, found.Links.Count);
                 }
                 else
                 {
                     // The copy engine reads the links as folders of one tree: it needs them all first.
-                    var scan = await Task.Run(() => DfsClient.FindLinks(src, exclusions, follow, ct), ct);
+                    var progress = rj.AddWalk(src);
+                    var scan = await Task.Run(() => DfsClient.FindLinks(src, exclusions, follow, ct, progress), ct);
+                    progress.Done = true;
                     found.Links = scan.Links;
                     if (follow) SaveLinks(part.Id, src, scan);
                     notes.AddRange(DescribeLinks(scan, lang).Select(n => label + n));
@@ -444,6 +539,7 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
             try
             {
                 var volume = ShadowCopy.VolumeOf(src);
+                rj.SetPhase("activity.phase.vss", volume);
                 if (!snapshots.TryGetValue(volume, out var snapshot))
                 {
                     snapshot = await ShadowCopy.CreateAsync(src, $"{rj.Record.Id:N}-{snapshots.Count}", ct);
@@ -472,6 +568,7 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
             if (part.Options.AutoTune) threads = AutoTune.Compute(await ResourceProbe.MeasureAsync(ct), true, 1).Threads;
             // Each worker holds its own connection: servers limit sessions, and disks seek.
             run.Threads = Math.Clamp(threads, 1, part.Source.IsSftp || part.Destination.IsSftp ? 8 : 16);
+            rj.SetPhase("activity.phase.plan", src);
             run.Plan = await Task.Run(() => PlanEngine(part, run.OpenSource, run.OpenTarget, lang, ct), ct);
             run.TotalFiles = run.Plan.Copies.Count;
             run.TotalBytes = run.Plan.Copies.Sum(c => c.Source.Size);
@@ -625,8 +722,14 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
         }
 
         var first = parts.Count;
+        var activities = new ProcessActivity[tasks.Count];
+        var counters = new ProgressCounter[tasks.Count];
         for (var i = 0; i < tasks.Count; i++)
+        {
             parts.Add((run.Label + tasks[i].Task.Label, "", Path.Combine(logDir, $"{stamp}-{run.Index:00}-{first + i:0000}.part")));
+            counters[i] = new ProgressCounter(tasks[i].ConsoleSource);
+            activities[i] = rj.AddProcess(run.Label + tasks[i].Task.Label, tasks[i].Task.Source, tasks[i].Task.Destination, counters[i]);
+        }
 
         // Each process copies as soon as its own part is ready: with versions (or extras deleted first) it
         // lists its folder with robocopy /L, moves or deletes what that shows, then copies, while the
@@ -637,16 +740,20 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
         var options = new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, run.RunJob.Options.Processes), CancellationToken = ct };
         await Parallel.ForEachAsync(Enumerable.Range(0, tasks.Count), options, async (i, token) =>
         {
-            var (t, segment, consoleSource) = tasks[i];
+            var (t, segment, _) = tasks[i];
             var job = segment.Job;
+            var activity = activities[i];
+            lock (activity) activity.StartedUtc = DateTime.UtcNow;
             if (needsList)
             {
+                lock (activity) activity.State = ProcessState.Listing;
                 var piece = new Segment(job, t.Source, t.Destination, PieceOf(segment, t));
                 piece.ListFile = await ListAsync(job, t, token);
                 try
                 {
                     var totals = new PreviewAggregator(t.Source, t.Destination, part.Mode);
                     foreach (var line in File.Exists(piece.ListFile) ? File.ReadLines(piece.ListFile) : []) totals.Add(line);
+                    lock (activity) activity.State = ProcessState.Preparing;
                     lock (versions)
                     {
                         rj.TotalFiles += totals.Result.FilesToCopy;
@@ -669,15 +776,27 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
             var args = RobocopyArgs.Build(job, t.Source, t.Destination, t.Pass, false, parts[first + i].File, true, t.RootExcludedDirs);
             lock (parts) parts[first + i] = parts[first + i] with { Command = "robocopy " + CommandLine.Join(args) };
 
-            var counter = new ProgressCounter(consoleSource);
+            var counter = counters[i];
             lock (rj.Counters) rj.Counters.Add(counter);
+            lock (activity) activity.State = ProcessState.Copying;
             var summary = new SummaryCollector();
             var code = await RobocopyProcess.RunAsync(args, line =>
             {
                 counter.Add(line);
                 summary.Add(line);
+                rj.Line(line);
+                if (RobocopyOutput.ParseLine(line) is { } l)
+                    lock (activity) activity.Current = l.Path;
+                else if (line?.Contains(" ERROR ", StringComparison.Ordinal) == true)
+                    lock (activity) activity.Errors++;
             }, token);
 
+            lock (activity)
+            {
+                activity.State = ProcessState.Done;
+                activity.EndedUtc = DateTime.UtcNow;
+                activity.ExitCode = code;
+            }
             lock (parts)
             {
                 combined |= code;
@@ -763,10 +882,14 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
         var counter = new ProgressCounter(run.Src);
         lock (rj.Counters) rj.Counters.Add(counter);
         parts.Add((run.Label + "engine", Loc.Fl(lang, "run.engine.cmd", run.Threads, job.Options.Compress ? Compression.Suffix : "-"), partFile));
+        var activity = rj.AddProcess(run.Label + "engine", run.Src, run.Dst, counter);
+        activity.State = ProcessState.Copying;
+        activity.StartedUtc = DateTime.UtcNow;
         await using var writer = new StreamWriter(partFile, false, new UTF8Encoding(true));
         void Log(string line)
         {
             lock (writer) writer.WriteLine(line);
+            rj.Line(line);
         }
 
         // Room first: expired versions go before anything is copied.

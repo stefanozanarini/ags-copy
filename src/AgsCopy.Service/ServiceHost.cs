@@ -9,6 +9,11 @@ public static class ServiceHost
     public static IHost Create(string[] args, bool windowsService)
     {
         DataDirectory.Ensure();
+        // Copies block threads on disks and networks (shadow copies, share listings, robocopy output):
+        // with only one thread per core to start from, the pipe would wait for the pool to grow and the
+        // GUI would see a service that does not answer.
+        ThreadPool.GetMinThreads(out var workers, out var io);
+        ThreadPool.SetMinThreads(Math.Max(workers, 64), Math.Max(io, 64));
 
         var builder = Host.CreateApplicationBuilder(args);
         if (windowsService) builder.Services.AddWindowsService(o => o.ServiceName = AppPaths.ServiceName);

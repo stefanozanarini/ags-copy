@@ -80,6 +80,8 @@ public partial class MainWindow : Window
         {
             _online = false;
             StatusText.Text = Ui.Describe(e);
+            // A service that runs but does not answer is busy or stuck, not stopped: copies go on meanwhile.
+            OfflineText.Text = Loc.T(ServiceProcessRunning() ? "err.service.busy" : "err.service");
         }
         finally
         {
@@ -87,6 +89,14 @@ public partial class MainWindow : Window
         }
         OfflineBanner.Visibility = _online ? Visibility.Collapsed : Visibility.Visible;
         UpdateButtons();
+    }
+
+    private static bool ServiceProcessRunning()
+    {
+        if (AppPaths.Portable) return false;
+        var processes = System.Diagnostics.Process.GetProcessesByName("AgsCopy.Service");
+        foreach (var p in processes) p.Dispose();
+        return processes.Length > 0;
     }
 
     private void Apply(ServiceStatus status)
@@ -117,6 +127,8 @@ public partial class MainWindow : Window
         DeleteButton.IsEnabled = _online && sel is { Running: false };
         RunButton.IsEnabled = _online && sel is { Running: false };
         StopButton.IsEnabled = _online && sel is { Running: true };
+        // Also while the service is too busy to answer the status: the window waits for it on its own.
+        ActivityButton.IsEnabled = sel is { Running: true };
         HistoryButton.IsEnabled = RestoreButton.IsEnabled = _online && sel != null;
         PauseButton.IsEnabled = ReportButton.IsEnabled = _online;
     }
@@ -266,6 +278,7 @@ public partial class MainWindow : Window
                      new LayoutPreviewWindow(job.ForSource(0), job.Id),
                      new RestoreWindow(job.Id, job.Name),
                      new HistoryWindow(job.Id, job.Name),
+                     new ActivityWindow(job.Id, job.Name),
                  })
         {
             w.Owner = this;
@@ -329,6 +342,11 @@ public partial class MainWindow : Window
         if (Selected is not { } row) return;
         if (!Ui.Confirm(this, Loc.F("main.confirmstop", row.Name))) return;
         await CallAsync(Commands.CancelJob, new IdRequest { Id = row.Id });
+    }
+
+    private void Activity_Click(object sender, RoutedEventArgs e)
+    {
+        if (Selected is { } row) new ActivityWindow(row.Id, row.Name) { Owner = this }.Show();
     }
 
     private void History_Click(object sender, RoutedEventArgs e)

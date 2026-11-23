@@ -18,6 +18,20 @@ public enum LinkKind
 /// <summary>A link below a source that is followed: <see cref="Relative"/> ('\' separated) and its full path.</summary>
 public sealed record LinkedFolder(string Relative, string Path, LinkKind Kind);
 
+/// <summary>How far a walk is, read by the activity window while it runs.</summary>
+public sealed class WalkProgress
+{
+    private long _folders;
+    private int _links;
+
+    public long Folders => Interlocked.Read(ref _folders);
+    public int Links => Volatile.Read(ref _links);
+    public bool Done { get; set; }
+
+    internal void Folder() => Interlocked.Increment(ref _folders);
+    internal void SetLinks(int links) => Volatile.Write(ref _links, links);
+}
+
 public sealed class LinkScan
 {
     public List<LinkedFolder> Links { get; } = [];
@@ -53,7 +67,7 @@ public static class LinkedFolders
     /// <param name="folderId">Identity of a folder (volume and file id) once its links are followed; needed to follow junctions.</param>
     /// <param name="threads">Folders listed at once. The walk goes level by level, so the result does not depend on it.</param>
     public static LinkScan Find(string root, Func<string, IEnumerable<FolderEntry>> list, Func<string, string?>? folderId, Exclusions exclusions,
-        bool followJunctions, CancellationToken ct, int? maxFolders = null, int threads = 1)
+        bool followJunctions, CancellationToken ct, int? maxFolders = null, int threads = 1, WalkProgress? progress = null)
     {
         var scan = new LinkScan();
         var max = maxFolders ?? (followJunctions ? MaxFolders : MaxNamespaceFolders);
@@ -71,6 +85,7 @@ public static class LinkedFolders
         {
             var (rel, behindLink) = folder;
             var found = new List<(Found, string, bool, bool)>();
+            progress?.Folder();
             foreach (var f in list(Full(rel)))
             {
                 var child = rel.Length == 0 ? f.Name : rel + "\\" + f.Name;
@@ -111,14 +126,27 @@ public static class LinkedFolders
             }
             else
             {
-                try
+                // Threads of its own: listing a share folder blocks on the network, and blocked thread-pool
+                // threads would starve the rest of the service (its pipe stops answering).
+                var current = level;
+                var taken = -1;
+                Exception? error = null;
+                var workers = Enumerable.Range(0, Math.Min(threads, current.Count)).Select(_ => new Thread(() =>
                 {
-                    Parallel.For(0, level.Count, new ParallelOptions { MaxDegreeOfParallelism = threads, CancellationToken = ct }, i => results[i] = Visit(level[i]));
-                }
-                catch (AggregateException e)
-                {
-                    System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(e.InnerExceptions[0]).Throw();
-                }
+                    try
+                    {
+                        for (int i; (i = Interlocked.Increment(ref taken)) < current.Count && Volatile.Read(ref error) == null && !ct.IsCancellationRequested;)
+                            results[i] = Visit(current[i]);
+                    }
+                    catch (Exception e)
+                    {
+                        Interlocked.CompareExchange(ref error, e, null);
+                    }
+                }) { IsBackground = true, Name = "AGS-Copy link walk" }).ToList();
+                foreach (var w in workers) w.Start();
+                foreach (var w in workers) w.Join();
+                if (error != null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error).Throw();
+                ct.ThrowIfCancellationRequested();
             }
 
             var next = new List<(string, bool)>();
@@ -139,6 +167,7 @@ public static class LinkedFolders
                 }
             }
             level = next;
+            progress?.SetLinks(scan.Links.Count);
         }
         return scan;
     }
