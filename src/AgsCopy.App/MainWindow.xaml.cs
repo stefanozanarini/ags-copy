@@ -236,7 +236,12 @@ public partial class MainWindow : Window
     /// </summary>
     internal async Task SelfTestAsync(Action<string> log)
     {
-        await RefreshAsync();
+        // The refresh of Loaded may still be on its way: a second one returns at once while it is.
+        for (var i = 0; i < 60 && _rows.Count == 0; i++)
+        {
+            await RefreshAsync();
+            if (_rows.Count == 0) await Task.Delay(500);
+        }
         if (_rows.Count == 0) throw new InvalidOperationException("No jobs to show.");
         foreach (var row in _rows.Take(4).ToList())
         {
