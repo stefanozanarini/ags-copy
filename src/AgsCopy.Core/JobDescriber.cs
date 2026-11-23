@@ -76,6 +76,7 @@ public static class JobDescriber
         {
             Add(SummaryLevel.Info, "sum.dfs");
             if (sources.Any(job.Options.FollowsJunctionsOn)) Add(SummaryLevel.Info, "sum.junctions.share");
+            if (job.Options.LinkSearchDepth > 0) Add(SummaryLevel.Warning, "sum.linkdepth", job.Options.LinkSearchDepth);
         }
 
         foreach (var x in sources) AddEndpoint(x, "sum.net.source");

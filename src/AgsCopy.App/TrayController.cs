@@ -15,6 +15,7 @@ public sealed class TrayController : IDisposable
     private readonly NotifyIcon _icon;
     private readonly DispatcherTimer _timer;
     private readonly ToolStripMenuItem _runMenu;
+    private readonly ToolStripMenuItem _stopMenu;
     private readonly ToolStripMenuItem _statusItem;
     private readonly ToolStripMenuItem _updateItem;
     private readonly DispatcherTimer _updateTimer;
@@ -27,6 +28,7 @@ public sealed class TrayController : IDisposable
     {
         _statusItem = new ToolStripMenuItem { Enabled = false };
         _runMenu = new ToolStripMenuItem(Loc.T("tray.run"));
+        _stopMenu = new ToolStripMenuItem(Loc.T("tray.stop"));
         var menu = new ContextMenuStrip();
         menu.Items.Add(new ToolStripMenuItem(Loc.T("tray.open"), null, (_, _) => OpenMain()) { Font = new System.Drawing.Font(menu.Font, System.Drawing.FontStyle.Bold) });
         menu.Items.Add(_statusItem);
@@ -34,6 +36,7 @@ public sealed class TrayController : IDisposable
         menu.Items.Add(_updateItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_runMenu);
+        menu.Items.Add(_stopMenu);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem(Loc.T("tray.exit"), null, (_, _) => System.Windows.Application.Current.Shutdown()));
         menu.Opening += (_, _) => BuildRunMenu();
@@ -113,6 +116,21 @@ public sealed class TrayController : IDisposable
             {
                 Enabled = !j.Running,
             });
+        }
+
+        // Stopping is for administrators: the elevated instance asks the service, after a confirmation.
+        _stopMenu.DropDownItems.Clear();
+        var running = jobs.Where(j => j.Running).OrderBy(j => j.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
+        _stopMenu.Enabled = running.Count > 0;
+        foreach (var j in running)
+        {
+            var (id, name) = (j.Id, j.Name);
+            _stopMenu.DropDownItems.Add(new ToolStripMenuItem($"{name} ({Progress.Short(j)})", null, (_, _) =>
+            {
+                if (MessageBox.Show(Loc.F("main.confirmstop", name), "AGS-Copy", MessageBoxButtons.YesNo, MessageBoxIcon.Question,
+                        MessageBoxDefaultButton.Button2) == DialogResult.Yes)
+                    Elevation.StartElevated("--stop", id.ToString());
+            }));
         }
     }
 

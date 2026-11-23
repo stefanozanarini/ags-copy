@@ -301,6 +301,7 @@ public sealed class JobEditorViewModel : ObservableObject
         ExcludeOlder = o.ExcludeOlder;
         SkipJunctions = o.SkipJunctions;
         FollowShareJunctions = o.FollowShareJunctions;
+        LinkSearchDepth = Math.Clamp(o.LinkSearchDepth, 0, CopyOptions.MaxLinkSearchDepth);
         FatFileTimes = o.FatFileTimes;
         _fileProperties = (int)o.FileProperties;
         ExcludeFiles = string.Join(Environment.NewLine, o.ExcludeFiles);
@@ -500,6 +501,12 @@ public sealed class JobEditorViewModel : ObservableObject
     public bool ExcludeOlder { get; set; }
     public bool SkipJunctions { get; set; }
     public bool FollowShareJunctions { get; set; }
+
+    /// <summary>The combo's index: 0 = every level, n = n levels.</summary>
+    public int LinkSearchDepth { get; set; }
+
+    public IReadOnlyList<string> LinkSearchDepths { get; } =
+        [Loc.T("options.linkdepth.all"), .. Enumerable.Range(1, CopyOptions.MaxLinkSearchDepth).Select(n => n.ToString())];
     public bool FatFileTimes { get; set; }
     public int FileProperties { get => _fileProperties; set => Set(ref _fileProperties, value); }
     public string ExcludeFiles { get; set; }
@@ -634,6 +641,7 @@ public sealed class JobEditorViewModel : ObservableObject
         o.SkipJunctions = SkipJunctions;
         o.DeleteExtrasFirst = _deleteExtrasFirst;
         o.FollowShareJunctions = FollowShareJunctions;
+        o.LinkSearchDepth = LinkSearchDepth;
         o.FatFileTimes = FatFileTimes;
         o.FileProperties = (FileProperties)_fileProperties;
         o.ExcludeFiles = Lines(ExcludeFiles);

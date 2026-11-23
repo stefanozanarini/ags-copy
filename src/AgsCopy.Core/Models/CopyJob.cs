@@ -253,6 +253,15 @@ public sealed class CopyOptions
     /// </summary>
     public bool FollowShareJunctions { get; set; } = true;
 
+    /// <summary>
+    /// How many levels of folders below a share source are searched for junctions and DFS links;
+    /// 0 = all of them. Links further down are not followed (robocopy skips them). The DFS links a
+    /// namespace lists are followed at any depth: asking for them costs nothing.
+    /// </summary>
+    public int LinkSearchDepth { get; set; }
+
+    public const int MaxLinkSearchDepth = 10;
+
     /// <summary>Whether a run looks for junctions to follow below a share source.</summary>
     public bool FollowsJunctionsOn(JobEndpoint source) => SkipJunctions && FollowShareJunctions && source.IsNetwork;
 

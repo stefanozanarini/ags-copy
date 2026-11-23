@@ -7,6 +7,7 @@ namespace AgsCopy.App;
 /// AGS-Copy.exe            configuration window (relaunches itself elevated)
 /// AGS-Copy.exe --tray     tray icon, unelevated, started at logon
 /// AGS-Copy.exe --run ID   asks the service to run a job now, then exits
+/// AGS-Copy.exe --stop ID  asks the service to stop a running job, then exits
 /// AGS-Copy.exe --selftest LOG   opens every window and page against the running service, writes
 ///                               what went wrong to LOG and exits with 1 if anything did (CI)
 /// The portable build only has the configuration window, with the engine inside it.
@@ -21,6 +22,8 @@ public partial class App : Application
         base.OnStartup(e);
         UserSettings.Load();
         var args = e.Args;
+        // Every window, whatever its XAML size, opens inside the screen.
+        EventManager.RegisterClassHandler(typeof(Window), FrameworkElement.LoadedEvent, new RoutedEventHandler((s, _) => Ui.FitToScreen((Window)s)));
 
         if (PortableBuild)
         {
@@ -38,7 +41,13 @@ public partial class App : Application
 
         if (args.Length >= 2 && args[0].Equals("--run", StringComparison.OrdinalIgnoreCase) && Guid.TryParse(args[1], out var id))
         {
-            _ = RunJobAndExitAsync(id);
+            _ = CallAndExitAsync(Commands.RunJob, id);
+            return;
+        }
+
+        if (args.Length >= 2 && args[0].Equals("--stop", StringComparison.OrdinalIgnoreCase) && Guid.TryParse(args[1], out var stopId))
+        {
+            _ = CallAndExitAsync(Commands.CancelJob, stopId);
             return;
         }
 
@@ -147,11 +156,11 @@ public partial class App : Application
         Shutdown(problems.Count == 0 ? 0 : 1);
     }
 
-    private async Task RunJobAndExitAsync(Guid id)
+    private async Task CallAndExitAsync(string command, Guid id)
     {
         try
         {
-            await PipeClient.CallAsync(Commands.RunJob, new IdRequest { Id = id });
+            await PipeClient.CallAsync(command, new IdRequest { Id = id });
         }
         catch (Exception ex)
         {

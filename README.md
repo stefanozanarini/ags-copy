@@ -54,6 +54,10 @@ through AGS-Copy's own copy engine. The interface is in Italian (default) and En
   first run of a job thus copies its junctions last; later runs copy them with the rest. The copy
   engine (SFTP, `.gz`) still waits for the walk. Without `/XJ`, robocopy and the engine follow
   everything themselves.
+  *Look for junctions and DFS links down to* limits the walk to the first levels of sub-folders
+  (every level by default). When the links sit in the first 2 or 3 folders this cuts the walk of
+  a large share to a few seconds; links further down are not followed, so robocopy skips them.
+  The DFS links the namespace lists are followed at any depth.
 - **Layout preview**: when a job has one source and one destination, adding them (or *Preview the
   layout*, for the selected source and destination) opens a window. It shows the source folder
   next to how the destination will look after the copy, folder by

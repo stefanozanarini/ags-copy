@@ -216,6 +216,11 @@
                                 <CheckBox Content="{l:T options.followshare}" IsChecked="{Binding FollowShareJunctions}" Margin="20,4,0,0"
                                           IsEnabled="{Binding IsChecked, ElementName=SkipJunctionsBox}" />
                                 <TextBlock Text="{l:T options.followshare.hint}" Style="{StaticResource Hint}" Margin="20,0,0,0" />
+                                <DockPanel Margin="20,0,0,0">
+                                    <TextBlock Text="{l:T options.linkdepth}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                                    <ComboBox ItemsSource="{Binding LinkSearchDepths}" SelectedIndex="{Binding LinkSearchDepth}" Width="110" HorizontalAlignment="Left" />
+                                </DockPanel>
+                                <TextBlock Text="{l:T options.linkdepth.hint}" Style="{StaticResource Hint}" Margin="20,2,0,0" />
                                 <CheckBox Content="{l:T options.fft}" IsChecked="{Binding FatFileTimes}" Margin="0,6,0,0" />
                                 <CheckBox Content="{l:T options.backup}" IsChecked="{Binding BackupMode}" Margin="0,6,0,0" />
                                 <Grid Margin="0,8,0,0">

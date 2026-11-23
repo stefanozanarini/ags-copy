@@ -490,19 +490,20 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
             found.Src = src;
             var exclusions = new Exclusions(part);
             var follow = part.Options.FollowsJunctionsOn(part.Source);
+            var depth = part.Options.LinkSearchDepth;
             try
             {
                 rj.SetPhase("activity.phase.links", src);
                 if (follow && !UsesEngine(part, dst, lang, out _))
                 {
                     // The walk of the whole share goes on while the copy runs.
-                    found.Links = await Task.Run(() => QuickLinks(part.Id, src, exclusions, ct), ct);
+                    found.Links = await Task.Run(() => QuickLinks(part.Id, src, exclusions, depth, ct), ct);
                     var progress = rj.AddWalk(src);
                     found.Walk = Task.Run(() =>
                     {
                         try
                         {
-                            return DfsClient.FindLinks(src, exclusions, true, found.WalkToken, progress);
+                            return DfsClient.FindLinks(src, exclusions, true, found.WalkToken, progress, depth);
                         }
                         finally
                         {
@@ -515,7 +516,7 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
                 {
                     // The copy engine reads the links as folders of one tree: it needs them all first.
                     var progress = rj.AddWalk(src);
-                    var scan = await Task.Run(() => DfsClient.FindLinks(src, exclusions, follow, ct, progress), ct);
+                    var scan = await Task.Run(() => DfsClient.FindLinks(src, exclusions, follow, ct, progress, depth), ct);
                     progress.Done = true;
                     found.Links = scan.Links;
                     if (follow) SaveLinks(part.Id, src, scan);
@@ -611,11 +612,13 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
     private static string LinksFile(Guid jobId) => Path.Combine(AppPaths.DataDir, "links", jobId.ToString("N") + ".json");
 
     /// <summary>The links a copy can start with: those of the last walk still there, and the DFS links the namespace lists.</summary>
-    private List<LinkedFolder> QuickLinks(Guid jobId, string src, Exclusions exclusions, CancellationToken ct)
+    private List<LinkedFolder> QuickLinks(Guid jobId, string src, Exclusions exclusions, int depth, CancellationToken ct)
     {
         var links = new List<LinkedFolder>();
+        // A walk made before the depth was lowered may hold links further down.
         if (LoadLinks(jobId, src) is { } last)
-            links.AddRange(LinkedFolders.Recheck(src, last.Links, DfsClient.EntryAt, DfsClient.FolderId, exclusions, true, ct));
+            links.AddRange(LinkedFolders.Recheck(src, last.Links.Where(l => depth <= 0 || l.Relative.Split('\\').Length <= depth),
+                DfsClient.EntryAt, DfsClient.FolderId, exclusions, true, ct));
         foreach (var l in DfsClient.NamespaceLinks(src, exclusions)?.Links ?? [])
             if (!links.Any(k => k.Relative.Equals(l.Relative, StringComparison.OrdinalIgnoreCase))) links.Add(l);
         return links;
@@ -1128,7 +1131,7 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
                 return result;
             }
             var links = job.Source.IsNetwork
-                ? (await Task.Run(() => DfsClient.FindLinks(src, new Exclusions(job), job.Options.FollowsJunctionsOn(job.Source), ct), ct)).Links
+                ? (await Task.Run(() => DfsClient.FindLinks(src, new Exclusions(job), job.Options.FollowsJunctionsOn(job.Source), ct, maxDepth: job.Options.LinkSearchDepth), ct)).Links
                 : [];
             leases.AddRange(ConnectDfsTargets(job, stored?.Source, src, links, lang));
 

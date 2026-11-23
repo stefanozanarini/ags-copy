@@ -122,6 +122,37 @@ public static class Ui
         MessageBox.Show(owner, message, "AGS-Copy", MessageBoxButton.YesNo, danger ? MessageBoxImage.Warning : MessageBoxImage.Question, MessageBoxResult.No)
         == MessageBoxResult.Yes;
 
+    /// <summary>
+    /// Keeps a window inside the work area of its screen: the sizes in the XAML suit a full HD
+    /// desktop, not a 1024×768 remote session, where a centred 1280-wide window hung off both sides.
+    /// </summary>
+    public static void FitToScreen(Window w)
+    {
+        if (w.WindowState != WindowState.Normal || PresentationSource.FromVisual(w) is not { CompositionTarget: { } target }) return;
+        var handle = new System.Windows.Interop.WindowInteropHelper(w).Handle;
+        var wa = System.Windows.Forms.Screen.FromHandle(handle).WorkingArea;
+        var area = new Rect(target.TransformFromDevice.Transform(new Point(wa.Left, wa.Top)),
+                            target.TransformFromDevice.Transform(new Point(wa.Right, wa.Bottom)));
+
+        w.MinWidth = Math.Min(w.MinWidth, area.Width);
+        w.MinHeight = Math.Min(w.MinHeight, area.Height);
+        var width = Math.Min(w.ActualWidth, area.Width);
+        var height = Math.Min(w.ActualHeight, area.Height);
+        var resized = width < w.ActualWidth || height < w.ActualHeight;
+        if (resized)
+        {
+            w.Width = width;
+            w.Height = height;
+        }
+
+        // Shrunk: centred again. Otherwise only pulled back if any of it is off the screen.
+        var left = resized ? area.Left + (area.Width - width) / 2 : w.Left;
+        var top = resized ? area.Top + (area.Height - height) / 2 : w.Top;
+        if (double.IsNaN(left) || double.IsNaN(top)) return;
+        w.Left = Math.Max(area.Left, Math.Min(left, area.Right - width));
+        w.Top = Math.Max(area.Top, Math.Min(top, area.Bottom - height));
+    }
+
     /// <summary>The first element of a type in a visual tree (for controls that cannot be bound, like PasswordBox).</summary>
     public static T? FindChild<T>(DependencyObject parent) where T : DependencyObject
     {

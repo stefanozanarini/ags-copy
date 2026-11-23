@@ -78,6 +78,11 @@
             <TreeView x:Name="JobTree" BorderThickness="0" Background="{StaticResource Surface}" Padding="4,6"
                       SelectedItemChanged="JobTree_SelectedItemChanged">
                 <TreeView.Resources>
+                    <!-- Grey selection, as in the editor's lists: the system blue made the grey lines under the name unreadable. -->
+                    <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="#E2E5E9" />
+                    <SolidColorBrush x:Key="{x:Static SystemColors.HighlightTextBrushKey}" Color="Black" />
+                    <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightBrushKey}" Color="#E2E5E9" />
+                    <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightTextBrushKey}" Color="Black" />
                     <!-- Jobs and pages alike: selection and expansion follow the nodes. -->
                     <Style TargetType="TreeViewItem">
                         <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}" />
@@ -97,7 +102,7 @@
                                 <TextBlock Text="{Binding NextRunLine}" Foreground="{StaticResource Muted}" FontSize="11" TextTrimming="CharacterEllipsis" />
                                 <ProgressBar Height="4" Margin="0,2,0,0" Minimum="0" Maximum="100" Value="{Binding Percent, Mode=OneWay}"
                                              IsIndeterminate="{Binding Indeterminate, Mode=OneWay}" Foreground="{StaticResource Brand}"
-                                             Background="{StaticResource Selection}" BorderThickness="0"
+                                             Background="{StaticResource Border}" BorderThickness="0"
                                              Visibility="{Binding Running, Converter={StaticResource BoolToVis}}" />
                             </StackPanel>
                         </Grid>

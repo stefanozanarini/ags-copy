@@ -94,14 +94,15 @@ public static class DfsClient
     /// share, which the DFS client reaches by itself). The namespace is asked for its links; only when it
     /// does not answer are its folders walked. With junctions the whole share is walked, many folders at once.
     /// </summary>
-    public static LinkScan FindLinks(string source, Exclusions exclusions, bool followJunctions, CancellationToken ct, WalkProgress? progress = null)
+    public static LinkScan FindLinks(string source, Exclusions exclusions, bool followJunctions, CancellationToken ct, WalkProgress? progress = null, int maxDepth = 0)
     {
         var src = PathUtil.NormalizeDir(source);
         if (!PathUtil.IsUnc(src)) return new LinkScan();
-        if (followJunctions) return LinkedFolders.Find(src, Folders, FolderId, exclusions, true, ct, threads: LinkedFolders.WalkThreads, progress: progress);
+        if (followJunctions)
+            return LinkedFolders.Find(src, Folders, FolderId, exclusions, true, ct, threads: LinkedFolders.WalkThreads, progress: progress, maxDepth: maxDepth);
         if (EntryOf(src) is not { } entry || IsLinkEntry(entry)) return new LinkScan();
         return NamespaceLinks(src, exclusions)
-            ?? LinkedFolders.Find(src, Folders, null, exclusions, false, ct, threads: LinkedFolders.WalkThreads, progress: progress);
+            ?? LinkedFolders.Find(src, Folders, null, exclusions, false, ct, threads: LinkedFolders.WalkThreads, progress: progress, maxDepth: maxDepth);
     }
 
     /// <summary>

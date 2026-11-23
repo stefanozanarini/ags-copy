@@ -250,6 +250,21 @@ public class LinkedFolderTests
     }
 
     [Fact]
+    public void A_depth_limit_stops_the_walk_but_keeps_the_links_up_to_it()
+    {
+        // Two levels: Data\Proj is found but not entered, so Deep (level 3) is not.
+        var two = LinkedFolders.Find(@"\\srv\share", ListShare, p => Ids.GetValueOrDefault(p), new Exclusions(Job(@"\\srv\share")), true, default, maxDepth: 2);
+        Assert.Equal([@"Root", @"Data\Proj"], two.Links.Select(l => l.Relative));
+        Assert.Equal([@"Data\Back", @"Root\Share"], two.Loops);
+        Assert.False(two.Truncated);
+
+        // One level: neither Data nor Root is listed.
+        var one = LinkedFolders.Find(@"\\srv\share", ListShare, p => Ids.GetValueOrDefault(p), new Exclusions(Job(@"\\srv\share")), true, default, maxDepth: 1);
+        Assert.Equal([@"Root"], one.Links.Select(l => l.Relative));
+        Assert.Empty(one.Loops);
+    }
+
+    [Fact]
     public void Many_threads_find_the_same_links_in_the_same_order()
     {
         var one = LinkedFolders.Find(@"\\srv\share", ListShare, p => Ids.GetValueOrDefault(p), new Exclusions(Job(@"\\srv\share")), true, default);

@@ -66,14 +66,16 @@ public static class LinkedFolders
     /// <param name="list">The sub-folders of a folder.</param>
     /// <param name="folderId">Identity of a folder (volume and file id) once its links are followed; needed to follow junctions.</param>
     /// <param name="threads">Folders listed at once. The walk goes level by level, so the result does not depend on it.</param>
+    /// <param name="maxDepth">Levels of folders below the root looked into for links; 0 = all.</param>
     public static LinkScan Find(string root, Func<string, IEnumerable<FolderEntry>> list, Func<string, string?>? folderId, Exclusions exclusions,
-        bool followJunctions, CancellationToken ct, int? maxFolders = null, int threads = 1, WalkProgress? progress = null)
+        bool followJunctions, CancellationToken ct, int? maxFolders = null, int threads = 1, WalkProgress? progress = null, int maxDepth = 0)
     {
         var scan = new LinkScan();
         var max = maxFolders ?? (followJunctions ? MaxFolders : MaxNamespaceFolders);
         var ids = new System.Collections.Concurrent.ConcurrentDictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
         var level = new List<(string Rel, bool BehindLink)> { ("", false) };
         var seen = 0;
+        var depth = 0; // of the folders in level
 
         string Full(string rel) => rel.Length == 0 ? root : PathUtil.Combine(root, rel);
 
@@ -150,6 +152,8 @@ public static class LinkedFolders
             }
 
             var next = new List<(string, bool)>();
+            depth++; // of what they hold
+            var deeper = maxDepth <= 0 || depth < maxDepth;
             foreach (var (what, rel, behind, isDfs) in results.SelectMany(r => r))
             {
                 switch (what)
@@ -161,6 +165,7 @@ public static class LinkedFolders
                         scan.Loops.Add(rel);
                         break;
                     default:
+                        if (!deeper) break;
                         if (++seen < max) next.Add((rel, behind));
                         else scan.Truncated = true;
                         break;
