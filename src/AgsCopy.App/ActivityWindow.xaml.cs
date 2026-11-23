@@ -89,6 +89,7 @@ public partial class ActivityWindow : Window
         {
             Summary.Text = Loc.T("activity.notrunning");
             PhaseText.Text = "";
+            CurrentText.Text = "";
             foreach (var r in _rows) r.Update(new ProcessActivity());
             _timer.Stop();
             return;
@@ -99,7 +100,9 @@ public partial class ActivityWindow : Window
             ? Loc.F("activity.summary.total", Fmt.Bytes(a.Bytes), Fmt.Bytes(a.TotalBytes), Fmt.Count(a.Files), Fmt.Count(a.TotalFiles), Fmt.Duration(elapsed))
             : Loc.F("activity.summary", Fmt.Bytes(a.Bytes), Fmt.Count(a.Files), Fmt.Duration(elapsed));
         PhaseText.Text = a.Phase == null ? "" : Loc.F(a.Phase, a.PhaseDetail ?? "");
-        WalksList.ItemsSource = a.Walks.Select(w => Loc.F(w.Done ? "activity.walk.done" : "activity.walk", w.Source, Fmt.Count(w.Folders), Fmt.Count(w.Links))).ToList();
+        CurrentText.Text = a.Current == null ? "" : Loc.F("activity.current", a.Current);
+        WalksList.ItemsSource = a.Walks.Select(w => Loc.F(w.Done ? "activity.walk.done" : "activity.walk", w.Source, Fmt.Count(w.Folders), Fmt.Count(w.Links))
+            + (w is { Done: false, Current: { } at } ? " " + Loc.F("activity.walk.at", at) : "")).ToList();
 
         while (_rows.Count < a.Processes.Count) _rows.Add(new ProcessRow());
         for (var i = 0; i < a.Processes.Count; i++) _rows[i].Update(a.Processes[i]);

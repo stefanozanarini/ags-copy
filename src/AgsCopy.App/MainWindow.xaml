@@ -99,7 +99,7 @@
                             <StackPanel Grid.Column="1">
                                 <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
                                 <TextBlock Text="{Binding StateText}" Foreground="{StaticResource Muted}" FontSize="11" TextTrimming="CharacterEllipsis" ToolTip="{Binding StateText}" />
-                                <TextBlock Text="{Binding NextRunLine}" Foreground="{StaticResource Muted}" FontSize="11" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Text="{Binding NextRunLine}" Foreground="{StaticResource Muted}" FontSize="11" TextTrimming="CharacterEllipsis" ToolTip="{Binding NextRunTip}" />
                                 <ProgressBar Height="4" Margin="0,2,0,0" Minimum="0" Maximum="100" Value="{Binding Percent, Mode=OneWay}"
                                              IsIndeterminate="{Binding Indeterminate, Mode=OneWay}" Foreground="{StaticResource Brand}"
                                              Background="{StaticResource Border}" BorderThickness="0"

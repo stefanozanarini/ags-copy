@@ -72,7 +72,18 @@ public sealed class JobRow : ObservableObject
     public string NextRunText => _s.NextRunLocal is { } n ? Fmt.DateTime(n) : "—";
 
     /// <summary>Under the job name in the tree: the schedule, or when it runs next.</summary>
-    public string NextRunLine => _s.NextRunLocal is { } n ? Loc.F("main.nextrun", Fmt.DateTime(n)) : ScheduleText;
+    public string NextRunLine => _s is { Running: true, Current: { } c } ? Tail(c)
+        : _s.NextRunLocal is { } n ? Loc.F("main.nextrun", Fmt.DateTime(n)) : ScheduleText;
+
+    /// <summary>The whole line under the job name, for its tooltip: a path is shortened there.</summary>
+    public string NextRunTip => _s is { Running: true, Current: { } c } ? c : NextRunLine;
+
+    /// <summary>"…olderile": the end of a path is what tells where the copy is.</summary>
+    private static string Tail(string path)
+    {
+        var parts = path.TrimEnd('\\').Split('\\');
+        return parts.Length <= 2 ? path : "…\\" + string.Join('\\', parts[^2..]);
+    }
 
     public string StateText
     {

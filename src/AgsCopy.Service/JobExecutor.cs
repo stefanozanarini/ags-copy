@@ -83,6 +83,24 @@ public sealed class RunningJob
         }
     }
 
+    /// <summary>
+    /// The file or folder the run is on: what a process copies, else what one lists, else the folder a
+    /// walk reads, else what the phase is about.
+    /// </summary>
+    public string? Current()
+    {
+        lock (_processes)
+        {
+            foreach (var state in new[] { ProcessState.Copying, ProcessState.Listing, ProcessState.Preparing })
+                foreach (var (p, _) in _processes)
+                    lock (p)
+                        if (p.State == state && (p.Current ?? p.Source) is { } c) return c;
+        }
+        lock (_walks)
+            if (_walks.FirstOrDefault(w => !w.Progress.Done && w.Progress.Current != null) is { Progress: { } walk }) return walk.Current;
+        lock (_lines) return _phaseDetail;
+    }
+
     public JobActivity Snapshot()
     {
         var a = new JobActivity
@@ -94,6 +112,7 @@ public sealed class RunningJob
             TotalFiles = TotalFiles,
             TotalBytes = TotalBytes,
             TotalsKnown = TotalsKnown,
+            Current = Current(),
         };
         lock (_lines)
         {
@@ -102,7 +121,7 @@ public sealed class RunningJob
             a.Lines = [.. _lines];
         }
         lock (_walks)
-            a.Walks = _walks.Select(w => new WalkActivity { Source = w.Source, Folders = w.Progress.Folders, Links = w.Progress.Links, Done = w.Progress.Done }).ToList();
+            a.Walks = _walks.Select(w => new WalkActivity { Source = w.Source, Folders = w.Progress.Folders, Links = w.Progress.Links, Done = w.Progress.Done, Current = w.Progress.Current }).ToList();
         lock (_processes)
         {
             foreach (var (p, c) in _processes)
@@ -529,6 +548,7 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
                 notes.Add(label + Loc.Fl(lang, "run.links.failed", e.Message));
             }
             found.Links ??= [];
+            rj.SetPhase("activity.phase.dfstargets", src);
             leases.AddRange(ConnectDfsTargets(part, null, src, found.Links, lang));
         }
         var links = found.Links ?? [];
@@ -751,7 +771,11 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
             {
                 lock (activity) activity.State = ProcessState.Listing;
                 var piece = new Segment(job, t.Source, t.Destination, PieceOf(segment, t));
-                piece.ListFile = await ListAsync(job, t, token);
+                piece.ListFile = await ListAsync(job, t, line =>
+                {
+                    if (RobocopyOutput.ParseLine(line) is { } l)
+                        lock (activity) activity.Current = l.Path;
+                }, token);
                 try
                 {
                     var totals = new PreviewAggregator(t.Source, t.Destination, part.Mode);
@@ -893,6 +917,9 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
         {
             lock (writer) writer.WriteLine(line);
             rj.Line(line);
+            // "New File<TAB>size<TAB>path": the file it has just copied.
+            if (line.Split('\t') is [_, _, var path, ..])
+                lock (activity) activity.Current = path;
         }
 
         // Room first: expired versions go before anything is copied.
@@ -946,11 +973,12 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
     }
 
     /// <summary>Runs robocopy /L over one process's part into a temporary list file and returns its path.</summary>
-    private static async Task<string> ListAsync(CopyJob job, RobocopyTask t, CancellationToken ct)
+    /// <param name="onLine">Each line as robocopy prints it, to show where the listing is.</param>
+    private static async Task<string> ListAsync(CopyJob job, RobocopyTask t, Action<string>? onLine, CancellationToken ct)
     {
         var listFile = Path.Combine(AppPaths.TempDir, $"list-{Guid.NewGuid():N}.log");
-        var args = RobocopyArgs.Build(job, t.Source, t.Destination, t.Pass, true, listFile, false, t.RootExcludedDirs);
-        await RobocopyProcess.RunAsync(args, null, ct);
+        var args = RobocopyArgs.Build(job, t.Source, t.Destination, t.Pass, true, listFile, onLine != null, t.RootExcludedDirs);
+        await RobocopyProcess.RunAsync(args, onLine, ct);
         return listFile;
     }
 

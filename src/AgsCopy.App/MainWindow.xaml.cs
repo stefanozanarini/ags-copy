@@ -333,6 +333,8 @@ public partial class MainWindow : Window
     private async void Run_Click(object sender, RoutedEventArgs e)
     {
         if (Selected is not { } row) return;
+        // Otherwise the run would use the job as it was last saved, not as the editor shows it.
+        if (_editor is { IsDirty: true, IsNew: false } editor && editor.JobId == row.Id && !await editor.SaveBeforeRunAsync()) return;
         if (row.DeletesFiles && !Ui.Confirm(this, Loc.F("main.confirmrun", row.Name, row.ModeText), danger: true)) return;
         await CallAsync(Commands.RunJob, new IdRequest { Id = row.Id });
     }

@@ -209,6 +209,9 @@ public sealed class JobStatus
     /// <summary>Copying while the totals are still being learned: show what is done, not a percentage.</summary>
     public bool CountsOnly { get; set; }
 
+    /// <summary>While running: the file or folder it is on (copying, listing or looking for links).</summary>
+    public string? Current { get; set; }
+
     public DateTime? NextRunLocal { get; set; }
     public RunRecord? LastRun { get; set; }
 }
@@ -227,6 +230,8 @@ public sealed class JobActivity
     public long TotalFiles { get; set; }
     public long TotalBytes { get; set; }
     public bool TotalsKnown { get; set; }
+    /// <summary>The file or folder the run is on, whatever it is doing.</summary>
+    public string? Current { get; set; }
     public List<WalkActivity> Walks { get; set; } = [];
     public List<ProcessActivity> Processes { get; set; } = [];
     /// <summary>The latest output lines, oldest first.</summary>
@@ -268,4 +273,5 @@ public sealed class WalkActivity
     public long Folders { get; set; }
     public int Links { get; set; }
     public bool Done { get; set; }
+    public string? Current { get; set; }
 }

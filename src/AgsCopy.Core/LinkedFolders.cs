@@ -23,12 +23,19 @@ public sealed class WalkProgress
 {
     private long _folders;
     private int _links;
+    private string? _current;
 
     public long Folders => Interlocked.Read(ref _folders);
+    /// <summary>The folder listed last (with many threads, one of those being listed).</summary>
+    public string? Current => Volatile.Read(ref _current);
     public int Links => Volatile.Read(ref _links);
     public bool Done { get; set; }
 
-    internal void Folder() => Interlocked.Increment(ref _folders);
+    internal void Folder(string path)
+    {
+        Interlocked.Increment(ref _folders);
+        Volatile.Write(ref _current, path);
+    }
     internal void SetLinks(int links) => Volatile.Write(ref _links, links);
 }
 
@@ -87,7 +94,7 @@ public static class LinkedFolders
         {
             var (rel, behindLink) = folder;
             var found = new List<(Found, string, bool, bool)>();
-            progress?.Folder();
+            progress?.Folder(Full(rel));
             foreach (var f in list(Full(rel)))
             {
                 var child = rel.Length == 0 ? f.Name : rel + "\\" + f.Name;

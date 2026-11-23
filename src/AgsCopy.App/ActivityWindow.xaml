@@ -11,6 +11,7 @@
                 <TextBlock x:Name="Heading" Style="{StaticResource SectionTitle}" />
                 <TextBlock x:Name="Summary" TextWrapping="Wrap" FontWeight="SemiBold" />
                 <TextBlock x:Name="PhaseText" TextWrapping="Wrap" Style="{StaticResource Hint}" />
+                <TextBlock x:Name="CurrentText" TextWrapping="Wrap" Margin="0,0,0,4" />
                 <ItemsControl x:Name="WalksList" Margin="0,4,0,0">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate>

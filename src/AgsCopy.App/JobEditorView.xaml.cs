@@ -177,12 +177,18 @@ public partial class JobEditorView : UserControl
             return;
         }
 
+        await SaveAsync();
+    }
+
+    /// <summary>Validates and saves the job; false when it was not saved (the user has been told why).</summary>
+    public async Task<bool> SaveAsync()
+    {
         var job = _vm.ToJob();
         var errors = JobValidator.Validate(job);
         if (errors.Count > 0)
         {
             Ui.Error(Owner, string.Join(Environment.NewLine, errors));
-            return;
+            return false;
         }
 
         SaveButton.IsEnabled = false;
@@ -192,15 +198,24 @@ public partial class JobEditorView : UserControl
             _vm.MarkSaved();
             ShowDirty();
             Saved?.Invoke(saved ?? job);
+            return true;
         }
         catch (Exception ex)
         {
             Ui.Error(Owner, ex);
+            return false;
         }
         finally
         {
             SaveButton.IsEnabled = true;
         }
+    }
+
+    /// <summary>Before a run of a job with unsaved changes: the summary is shown, then the changes saved if the user says so.</summary>
+    public async Task<bool> SaveBeforeRunAsync()
+    {
+        _vm.Step = JobEditorViewModel.SummaryStep;
+        return Ui.Confirm(Owner, Loc.T("editor.unsaved.run")) && await SaveAsync();
     }
 
     private void Discard_Click(object sender, RoutedEventArgs e)
