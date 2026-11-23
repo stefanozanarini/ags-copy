@@ -1240,16 +1240,36 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
 
             if (Directory.Exists(path))
             {
-                if (req.IsDestination)
-                {
-                    var probe = Path.Combine(path, $".agscopy-{Guid.NewGuid():N}.tmp");
-                    File.WriteAllText(probe, "AGS-Copy");
-                    File.Delete(probe);
-                }
-                else
+                // Reading and writing are tried apart: a share often lets an account read a folder it cannot write.
+                var account = req.Endpoint.HasCredential ? req.Endpoint.Credential!.UserName : Loc.Tl(lang, "test.account.computer");
+                try
                 {
                     using var e = Directory.EnumerateFileSystemEntries(path).GetEnumerator();
                     e.MoveNext();
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    return new PathTestResult { Message = Loc.Fl(lang, "test.denied.read", account, path) };
+                }
+                if (req.IsDestination)
+                {
+                    var probe = Path.Combine(path, $"agscopy-test-{Guid.NewGuid():N}.txt");
+                    try
+                    {
+                        File.WriteAllText(probe, "AGS-Copy");
+                    }
+                    catch (UnauthorizedAccessException)
+                    {
+                        return new PathTestResult { Message = Loc.Fl(lang, "test.denied.write", account, path) };
+                    }
+                    try
+                    {
+                        File.Delete(probe);
+                    }
+                    catch (UnauthorizedAccessException)
+                    {
+                        return new PathTestResult { Message = Loc.Fl(lang, "test.denied.delete", account, path, Path.GetFileName(probe)) };
+                    }
                 }
                 return new PathTestResult { Ok = true, Message = Loc.Tl(lang, req.IsDestination ? "test.ok.write" : "test.ok.read") };
             }
