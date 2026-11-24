@@ -28,6 +28,9 @@ public interface ITargetStore : ISourceStore
 {
     void CreateDirectory(string relative);
 
+    /// <summary>A file there (not a folder).</summary>
+    bool FileExists(string relative);
+
     /// <summary>A new file (overwritten if it exists), to be moved in place with <see cref="Replace"/>.</summary>
     Stream Create(string relative);
 

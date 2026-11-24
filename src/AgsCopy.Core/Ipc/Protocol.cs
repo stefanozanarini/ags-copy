@@ -266,7 +266,7 @@ public sealed class ProcessActivity
     public int? ExitCode { get; set; }
 }
 
-/// <summary>The walk of a share looking for links, which may go on while the copy runs.</summary>
+/// <summary>The walk of a share looking for links, or of a copy-engine run comparing both trees; either may go on while the copy runs.</summary>
 public sealed class WalkActivity
 {
     public string Source { get; set; } = "";
@@ -274,4 +274,9 @@ public sealed class WalkActivity
     public int Links { get; set; }
     public bool Done { get; set; }
     public string? Current { get; set; }
+
+    /// <summary>A copy-engine run comparing source and destination while it copies, rather than a look for links.</summary>
+    public bool Compare { get; set; }
+    public long FilesToCopy { get; set; }
+    public long BytesToCopy { get; set; }
 }

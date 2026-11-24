@@ -45,6 +45,7 @@ public sealed class RunningJob
     public const int MaxLines = 500;
     private readonly List<(ProcessActivity Info, ProgressCounter Counter)> _processes = [];
     private readonly List<(string Source, WalkProgress Progress)> _walks = [];
+    private readonly List<(string Source, SyncWalkProgress Progress)> _compares = [];
     private readonly Queue<string> _lines = new();
     private string? _phase;
     private string? _phaseDetail;
@@ -73,6 +74,12 @@ public sealed class RunningJob
         return w;
     }
 
+    /// <summary>A copy-engine run reading both trees while it copies.</summary>
+    public void AddCompare(string source, SyncWalkProgress progress)
+    {
+        lock (_walks) _compares.Add((source, progress));
+    }
+
     public void Line(string? line)
     {
         if (string.IsNullOrWhiteSpace(line)) return;
@@ -97,7 +104,10 @@ public sealed class RunningJob
                         if (p.State == state && (p.Current ?? p.Source) is { } c) return c;
         }
         lock (_walks)
+        {
             if (_walks.FirstOrDefault(w => !w.Progress.Done && w.Progress.Current != null) is { Progress: { } walk }) return walk.Current;
+            if (_compares.FirstOrDefault(w => !w.Progress.Done && w.Progress.Current != null) is { Progress: { } compare }) return compare.Current;
+        }
         lock (_lines) return _phaseDetail;
     }
 
@@ -121,7 +131,12 @@ public sealed class RunningJob
             a.Lines = [.. _lines];
         }
         lock (_walks)
-            a.Walks = _walks.Select(w => new WalkActivity { Source = w.Source, Folders = w.Progress.Folders, Links = w.Progress.Links, Done = w.Progress.Done, Current = w.Progress.Current }).ToList();
+            a.Walks = _walks.Select(w => new WalkActivity { Source = w.Source, Folders = w.Progress.Folders, Links = w.Progress.Links, Done = w.Progress.Done, Current = w.Progress.Current })
+                .Concat(_compares.Select(w => new WalkActivity
+                {
+                    Compare = true, Source = w.Source, Folders = w.Progress.Folders, FilesToCopy = w.Progress.FilesToCopy, BytesToCopy = w.Progress.BytesToCopy,
+                    Done = w.Progress.Done, Current = w.Progress.Current,
+                })).ToList();
         lock (_processes)
         {
             foreach (var (p, c) in _processes)
@@ -297,16 +312,18 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
             }
             rj.TotalFiles = runs.Sum(r => r.TotalFiles);
             rj.TotalBytes = runs.Sum(r => r.TotalBytes);
-            if (runs.LastOrDefault(r => r.Plan == null) is { } lastRobocopy) lastRobocopy.Last = true;
-            // The copy engine plans everything first; robocopy runs learn their totals as they go.
-            rj.TotalsKnown = runs.All(r => r.Plan != null);
+            if (runs.LastOrDefault(r => !r.Engine) is { } lastRobocopy) lastRobocopy.Last = true;
+            // Both robocopy and the copy engine learn their totals as they go; an engine-only job knows
+            // them once the walk of its last run is done.
+            if (runs.Count > 0 && runs.All(r => r.Engine)) runs[^1].Last = true;
+            rj.TotalsKnown = false;
             rj.Scanning = false;
             rj.SetPhase(null);
 
             foreach (var run in runs)
             {
                 ct.ThrowIfCancellationRequested();
-                if (run.Plan != null)
+                if (run.Engine)
                     engineResults.Add(await RunEngineAsync(run, rj, startLocal, Path.Combine(logDir, $"{stamp}-{run.Index:00}-engine.part"), parts, notes, lang, ct));
                 else
                     await RunRobocopyAsync(run, rj, startLocal, logDir, stamp, parts, notes, versions, lang, ct);
@@ -334,7 +351,7 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
                 log.LogInformation("Source {Source}: walk done, {Count} links, {Added} not known when the copy started", found.Src, scan.Links.Count, added.Count);
                 if (added.Count == 0) continue;
                 notes.Add(label + Loc.Fl(lang, "run.links.late", added.Count, string.Join(", ", added.Take(10).Select(l => l.Relative))));
-                foreach (var run in runs.Where(r => r.Source == i && r.Plan == null))
+                foreach (var run in runs.Where(r => r.Source == i && !r.Engine))
                 {
                     ct.ThrowIfCancellationRequested();
                     leases.AddRange(ConnectDfsTargets(run.Part, null, run.Src, added, lang));
@@ -466,7 +483,7 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
         public Task<LinkScan>? Walk { get; set; }
     }
 
-    /// <summary>One source of a run, ready to copy: robocopy segments with their lists, or an engine plan.</summary>
+    /// <summary>One source of a run, ready to copy: robocopy segments, or the copy engine.</summary>
     private sealed class SourceRun
     {
         public required CopyJob Part { get; init; }
@@ -477,13 +494,16 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
         public required string Src { get; set; }
         public required string Dst { get; init; }
         public List<Segment> Segments { get; } = [];
-        public SyncPlan? Plan { get; set; }
+        /// <summary>Copied by the copy engine, which reads both trees while it copies.</summary>
+        public bool Engine { get; set; }
         public Func<ISourceStore>? OpenSource { get; set; }
         public Func<ITargetStore>? OpenTarget { get; set; }
         public int Threads { get; set; }
+        /// <summary>Folders the engine reads at the same time.</summary>
+        public int Walkers { get; set; }
         public long TotalFiles { get; set; }
         public long TotalBytes { get; set; }
-        /// <summary>The last robocopy run of the job.</summary>
+        /// <summary>The last robocopy run of the job, or the last run of an engine-only job.</summary>
         public bool Last { get; set; }
         /// <summary>Which of the job's sources this run copies.</summary>
         public required int Source { get; init; }
@@ -589,10 +609,8 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
             if (part.Options.AutoTune) threads = AutoTune.Compute(await ResourceProbe.MeasureAsync(ct), true, 1).Threads;
             // Each worker holds its own connection: servers limit sessions, and disks seek.
             run.Threads = Math.Clamp(threads, 1, part.Source.IsSftp || part.Destination.IsSftp ? 8 : 16);
-            rj.SetPhase("activity.phase.plan", src);
-            run.Plan = await Task.Run(() => PlanEngine(part, run.OpenSource, run.OpenTarget, lang, ct), ct);
-            run.TotalFiles = run.Plan.Copies.Count;
-            run.TotalBytes = run.Plan.Copies.Sum(c => c.Source.Size);
+            run.Walkers = EngineWalkers(part);
+            run.Engine = true;
             return run;
         }
 
@@ -885,19 +903,28 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
     private static Func<ITargetStore> TargetOpener(CopyJob job, CopyJob? stored, string dst, string? lang) =>
         job.Destination.IsSftp ? () => Sftp.Open(job.Destination, stored?.Destination, lang) : () => new LocalTarget(dst);
 
-    /// <summary>Both trees, scanned, and what a run would do with them.</summary>
+    /// <summary>Folders the copy engine reads at once: a share answers many at a time, an SFTP server is read one folder after the other.</summary>
+    private static int EngineWalkers(CopyJob job) => job.Source.IsSftp || job.Destination.IsSftp ? 1 : 16;
+
+    private static string IndexFile(Guid jobId, string dst) =>
+        Path.Combine(AppPaths.DataDir, "index", $"{jobId:N}-{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(dst.ToUpperInvariant())))[..16]}.gz");
+
+    /// <summary>Both trees, scanned at the same time, and what a run would do with them (the preview).</summary>
     private static SyncPlan PlanEngine(CopyJob job, Func<ISourceStore> openSource, Func<ITargetStore> openTarget, string? lang, CancellationToken ct)
     {
         var exclusions = new Exclusions(job);
-        List<SyncEntry> sourceItems;
+        var walkers = EngineWalkers(job);
         using (var s = openSource())
-        {
             if (!s.Exists()) throw new ServiceException(Loc.Fl(lang, "err.nosource", job.Source.Path));
-            sourceItems = SyncEngine.Scan(s, exclusions, false, ct);
-        }
-        using var t = openTarget();
-        var exists = t.Exists();
-        return SyncPlan.Build(sourceItems, exists ? SyncEngine.Scan(t, exclusions, true, ct) : null, job.Options.Compress);
+        var source = Task.Run(() => SyncEngine.Scan(openSource, walkers, exclusions, false, ct), ct);
+        var destination = Task.Run(() =>
+        {
+            using (var t = openTarget())
+                if (!t.Exists()) return null;
+            return SyncEngine.Scan(openTarget, walkers, exclusions, true, ct);
+        }, ct);
+        Task.WaitAll([source, destination], ct);
+        return SyncPlan.Build(source.Result, destination.Result, job.Options.Compress);
     }
 
     private async Task<SyncResult> RunEngineAsync(SourceRun run, RunningJob rj, DateTime startLocal, string partFile,
@@ -923,24 +950,65 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
         }
 
         // Room first: expired versions go before anything is copied.
-        if (job.Options.KeepVersions && run.Plan!.DestinationExists)
+        if (job.Options.KeepVersions)
         {
             using var t = run.OpenTarget!();
             var removed = SyncEngine.RemoveExpiredVersions(t, job.Options.VersionRetentionDays, Log);
             if (removed > 0) notes.Add(run.Label + Loc.Fl(lang, "run.versions.removed", removed, job.Options.VersionRetentionDays));
         }
 
-        var result = await SyncEngine.RunAsync(run.Plan!, run.OpenSource!, run.OpenTarget!, new SyncSettings
+        // What the destination held after the last runs spares reading it again, but for a full check now and then.
+        var indexFile = IndexFile(job.Id, run.Dst);
+        var index = DestinationIndex.Load(indexFile) ?? new DestinationIndex();
+        var walk = new SyncWalk
         {
-            Mode = job.Mode,
-            Compress = job.Options.Compress,
-            KeepVersions = job.Options.KeepVersions,
-            StartLocal = startLocal,
-            Threads = run.Threads,
-            Retries = job.Options.Retries,
-            RetryWaitSeconds = job.Options.RetryWaitSeconds,
-            ExtrasFirst = job.Options.DeleteExtrasFirst && !job.Options.KeepVersions,
-        }, counter, Log, ct);
+            Exclusions = new Exclusions(job),
+            Threads = run.Walkers,
+            Index = index,
+            Verify = index.NeedsVerify(DateTime.UtcNow),
+        };
+        walk.Progress.OnPlanned = bytes =>
+        {
+            lock (rj)
+            {
+                rj.TotalFiles++;
+                rj.TotalBytes += bytes;
+            }
+        };
+        rj.AddCompare(run.Src, walk.Progress);
+
+        SyncResult result;
+        try
+        {
+            result = await SyncEngine.RunAsync(walk, run.OpenSource!, run.OpenTarget!, new SyncSettings
+            {
+                Mode = job.Mode,
+                Compress = job.Options.Compress,
+                KeepVersions = job.Options.KeepVersions,
+                StartLocal = startLocal,
+                Threads = run.Threads,
+                Retries = job.Options.Retries,
+                RetryWaitSeconds = job.Options.RetryWaitSeconds,
+                ExtrasFirst = job.Options.DeleteExtrasFirst && !job.Options.KeepVersions,
+            }, counter, Log, ct);
+        }
+        finally
+        {
+            // Saved even when the run stops half-way: the folders it read are up to date, the others as they were.
+            try
+            {
+                index.Save(indexFile);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                log.LogWarning(e, "Cannot save the destination index {File}", indexFile);
+            }
+        }
+        if (run.Last) rj.TotalsKnown = true;
+        notes.Add(run.Label + (result.DestinationVerified
+            ? Loc.Fl(lang, "run.index.verified", Fmt.Count(result.FoldersRead, culture), DestinationIndex.VerifyDays)
+            : Loc.Fl(lang, "run.index.used", Fmt.Count(result.FoldersRead, culture), Fmt.Count(result.DestinationFoldersRead, culture),
+                index.VerifiedUtc.ToLocalTime().ToString("g", culture), DestinationIndex.VerifyDays)));
         if (result.ArchivedCount > 0) notes.Add(run.Label + Loc.Fl(lang, "run.versions", Fmt.Count(result.ArchivedCount, culture), PathUtil.Combine(run.Dst, result.VersionsFolder!)));
         if (result.FilesCompressed > 0) notes.Add(run.Label + Loc.Fl(lang, "run.gz", Fmt.Count(result.FilesCompressed, culture)));
 
@@ -953,7 +1021,7 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
         record.VersionsArchived += result.ArchivedCount;
         // Robocopy-like exit code, so history and reports read the same: 1 copied, 2 extras, 8 failures.
         record.ExitCode |= (result.FilesCopied > 0 ? 1 : 0) | (result.FilesExtra + result.DirsExtra > 0 ? 2 : 0) | (result.FilesFailed > 0 || result.Errors.Count > 0 ? 8 : 0);
-        record.Outcome = Worse(record.Outcome, result.FilesFailed > 0 && result.FilesCopied == 0 && run.Plan!.Copies.Count > 0 ? RunOutcome.Failed
+        record.Outcome = Worse(record.Outcome, result.FilesFailed > 0 && result.FilesCopied == 0 ? RunOutcome.Failed
             : result.FilesFailed > 0 || result.Errors.Count > 0 ? RunOutcome.Warning
             : RunOutcome.Success);
         return result;

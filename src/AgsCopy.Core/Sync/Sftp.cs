@@ -152,6 +152,8 @@ public sealed class SftpStore(SftpClient client, SftpLocation location) : ITarge
 
     public void Move(string relative, string newRelative) => client.RenameFile(Remote(relative), Remote(newRelative));
 
+    public bool FileExists(string relative) => client.Exists(Remote(relative)) && !client.GetAttributes(Remote(relative)).IsDirectory;
+
     public void Delete(string relative, bool isDirectory)
     {
         if (!isDirectory)

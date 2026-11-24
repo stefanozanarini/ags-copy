@@ -16,7 +16,8 @@ public class LocalSource(string root, bool followLinks = false) : ISourceStore
 
     public IReadOnlyList<SyncEntry> List(string relative)
     {
-        var options = new EnumerationOptions { AttributesToSkip = followLinks ? 0 : FileAttributes.ReparsePoint, IgnoreInaccessible = false, RecurseSubdirectories = false };
+        // A larger buffer than the default 4 KB: a share then sends hundreds of names per round trip, not about forty.
+        var options = new EnumerationOptions { AttributesToSkip = followLinks ? 0 : FileAttributes.ReparsePoint, IgnoreInaccessible = false, RecurseSubdirectories = false, BufferSize = 64 * 1024 };
         var list = new List<SyncEntry>();
         foreach (var i in new DirectoryInfo(Full(relative)).EnumerateFileSystemInfos("*", options))
         {
@@ -37,6 +38,8 @@ public class LocalSource(string root, bool followLinks = false) : ISourceStore
 public sealed class LocalTarget(string root) : LocalSource(root), ITargetStore
 {
     public void CreateDirectory(string relative) => Directory.CreateDirectory(Full(relative));
+
+    public bool FileExists(string relative) => File.Exists(Full(relative));
 
     public Stream Create(string relative) =>
         new FileStream(Full(relative), FileMode.Create, FileAccess.Write, FileShare.None, 1 << 16);

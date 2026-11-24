@@ -42,15 +42,9 @@ public sealed class SyncPlan
                 if (!dest.TryGetValue(s.Relative, out var dd) || !dd.IsDirectory) plan.Directories.Add(s.Relative);
                 continue;
             }
-
-            // a.txt is stored as a.txt.gz, unless the source also has an a.txt.gz.
-            var gz = compress && Compression.IsCompressible(s.Name) && !sourceNames.Contains(s.Relative + Compression.Suffix);
-            var target = gz ? s.Relative + Compression.Suffix : s.Relative;
+            var target = TargetOf(s, sourceNames, compress, out var gz);
             expected.Add(target);
-
-            if (dest.TryGetValue(target, out var d) && !d.IsDirectory
-                && (d.ModifiedUtc - s.ModifiedUtc).Duration() <= TimeTolerance
-                && (gz || d.Size == s.Size))
+            if (dest.TryGetValue(target, out var d) && UpToDate(s, d, gz))
             {
                 plan.Unchanged++;
                 plan.UnchangedBytes += s.Size;
@@ -60,19 +54,83 @@ public sealed class SyncPlan
         }
 
         // Extras: the topmost destination items the source does not explain.
-        var extraDirs = new List<string>();
+        var extraDirs = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         foreach (var d in (destination ?? []).OrderBy(d => d.Relative, StringComparer.Ordinal))
         {
             if (expected.Contains(d.Relative)) continue;
-            if (extraDirs.Any(x => d.Relative.StartsWith(x + "/", StringComparison.OrdinalIgnoreCase)))
+            if (ExtraAbove(d.Relative, extraDirs) is { } i)
             {
-                var i = plan.Extras.FindIndex(e => d.Relative.StartsWith(e.Entry.Relative + "/", StringComparison.OrdinalIgnoreCase));
-                if (i >= 0 && !d.IsDirectory) plan.Extras[i] = plan.Extras[i] with { Files = plan.Extras[i].Files + 1, Bytes = plan.Extras[i].Bytes + d.Size };
+                if (!d.IsDirectory) plan.Extras[i] = plan.Extras[i] with { Files = plan.Extras[i].Files + 1, Bytes = plan.Extras[i].Bytes + d.Size };
                 continue;
             }
-            if (d.IsDirectory) extraDirs.Add(d.Relative);
+            if (d.IsDirectory) extraDirs[d.Relative] = plan.Extras.Count;
             plan.Extras.Add(new SyncExtra(d, d.IsDirectory ? 0 : 1, d.IsDirectory ? 0 : d.Size));
         }
         return plan;
     }
+
+    /// <summary>The extra folder an item sits in, looked up through its parents.</summary>
+    private static int? ExtraAbove(string relative, Dictionary<string, int> extraDirs)
+    {
+        for (var p = SyncPath.Parent(relative); !string.IsNullOrEmpty(p); p = SyncPath.Parent(p))
+            if (extraDirs.TryGetValue(p, out var i)) return i;
+        return null;
+    }
+
+    /// <summary>Where a source file goes: a.txt is stored as a.txt.gz, unless the source also has an a.txt.gz.</summary>
+    private static string TargetOf(SyncEntry s, ISet<string> sourceNames, bool compress, out bool gz)
+    {
+        gz = compress && Compression.IsCompressible(s.Name) && !sourceNames.Contains(s.Relative + Compression.Suffix);
+        return gz ? s.Relative + Compression.Suffix : s.Relative;
+    }
+
+    private static bool UpToDate(SyncEntry s, SyncEntry d, bool gz) =>
+        !d.IsDirectory && (d.ModifiedUtc - s.ModifiedUtc).Duration() <= TimeTolerance && (gz || d.Size == s.Size);
+
+    /// <summary>
+    /// One folder of both trees, compared as soon as it is read: what the streaming run copies from it,
+    /// which subfolders it reads next and what of the destination the source does not explain.
+    /// </summary>
+    /// <param name="source">The items directly inside the folder in the source.</param>
+    /// <param name="destination">The same folder in the destination (empty when it does not exist).</param>
+    public static FolderComparison Compare(IReadOnlyList<SyncEntry> source, IReadOnlyList<SyncEntry> destination, bool compress)
+    {
+        var c = new FolderComparison();
+        var dest = new Dictionary<string, SyncEntry>(StringComparer.OrdinalIgnoreCase);
+        foreach (var d in destination) dest[d.Relative] = d;
+        var sourceNames = new HashSet<string>(source.Select(s => s.Relative), StringComparer.OrdinalIgnoreCase);
+        var expected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var s in source)
+        {
+            if (s.IsDirectory)
+            {
+                expected.Add(s.Relative);
+                c.Folders.Add((s.Relative, dest.TryGetValue(s.Relative, out var dd) && dd.IsDirectory));
+                continue;
+            }
+            var target = TargetOf(s, sourceNames, compress, out var gz);
+            expected.Add(target);
+            if (dest.TryGetValue(target, out var d) && UpToDate(s, d, gz))
+            {
+                c.Unchanged++;
+                c.UnchangedBytes += s.Size;
+                continue;
+            }
+            c.Copies.Add(new SyncCopy(s, target, gz, d != null));
+        }
+        c.Extras.AddRange(destination.Where(d => !expected.Contains(d.Relative)));
+        return c;
+    }
+}
+
+/// <summary>What <see cref="SyncPlan.Compare"/> found in one folder.</summary>
+public sealed class FolderComparison
+{
+    /// <summary>The source's subfolders, and whether the destination already has each.</summary>
+    public List<(string Relative, bool Exists)> Folders { get; } = [];
+    public List<SyncCopy> Copies { get; } = [];
+    /// <summary>Destination items directly inside the folder that the source does not have.</summary>
+    public List<SyncEntry> Extras { get; } = [];
+    public long Unchanged { get; set; }
+    public long UnchangedBytes { get; set; }
 }

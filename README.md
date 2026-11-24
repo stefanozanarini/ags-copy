@@ -126,8 +126,8 @@ through AGS-Copy's own copy engine. The interface is in Italian (default) and En
   total, and an estimate of the time left. Robocopy jobs start copying at once, without listing the
   whole tree first: the bar shows the bytes and files copied so far, and a percentage only when
   the `robocopy /L` pass of versions (or extras deleted first) has given the totals. The copy
-  engine plans everything first and always shows a percentage. The tray tooltip shows the
-  percentage, or the bytes copied.
+  engine also copies while it compares, and shows a percentage once its comparison is done. The
+  tray tooltip shows the percentage, or the bytes copied.
 - **Activity** (*Activity…* in the main window, while a job runs), refreshed every second: what
   the run is preparing (network connections, shadow copy, link lookup), how far each walk for links
   is (folders read, links found, also while it goes on alongside the copy), each robocopy process
@@ -212,6 +212,17 @@ AGS-Copy.exe --run <job id>   ──┘   JSON lines, one request per connection
   - Copy never deletes, and Mirror deletes extras or moves them to the versions folder;
   - files are written under a temporary name and moved in place;
   - files are compared by time (2 s tolerance) and, for plain files, size.
+
+  It does not scan both trees before copying: it reads source and destination folder by folder,
+  16 folders at a time on shares (one at a time on SFTP), and hands each folder's copies to the
+  copy threads as soon as that folder is compared. With *delete extras first* the copies wait for
+  the comparison, which deletes the extras. A share or DFS cannot tell which files changed, so
+  the source is read in full at every run; the destination is not: what the engine leaves there
+  is kept in a destination index (`DataDir\index`, one per job and destination), and later runs
+  compare the source with it. Every 7 days, when there is no index yet, or when the top folder of
+  the destination no longer matches the index (emptied, another disk), the run reads the whole
+  destination and rebuilds the index. A file deleted from the destination by hand therefore
+  comes back at the next full check, not before.
 
   It keeps dates and times but not Windows permissions and attributes. Extra robocopy arguments
   do not apply to it.
