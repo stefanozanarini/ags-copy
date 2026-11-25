@@ -121,7 +121,8 @@ through AGS-Copy's own copy engine. The interface is in Italian (default) and En
     are compressed with Windows (NTFS) compression. They stay ordinary files.
   - Any other destination (a NAS without NTFS compression, SFTP): each such file is written as
     `name.gz` while it is copied, so no temporary space is needed on the PC. 7-Zip and Windows 11
-    Explorer open them.
+    Explorer open them. A name with no room left for `.gz` (255 characters, or 255 UTF-8 bytes on
+    a NAS) is copied as it is.
 - **Progress bar** in the job list while a job runs: percentage, bytes and files done out of the
   total, and an estimate of the time left. Robocopy jobs start copying at once, without listing the
   whole tree first: the bar shows the bytes and files copied so far, and a percentage only when

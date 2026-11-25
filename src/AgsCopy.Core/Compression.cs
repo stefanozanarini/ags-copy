@@ -23,4 +23,14 @@ public static class Compression
     };
 
     public static bool IsCompressible(string fileName) => !Compressed.Contains(Path.GetExtension(fileName));
+
+    /// <summary>Longest file name: 255 UTF-16 characters on NTFS, 255 UTF-8 bytes on a NAS's Linux file system.</summary>
+    public const int MaxNameLength = 255;
+
+    /// <summary>Whether name.gz is still a valid name; a name at the limit is copied as it is instead.</summary>
+    public static bool SuffixFits(string fileName)
+    {
+        var name = fileName + Suffix;
+        return name.Length <= MaxNameLength && System.Text.Encoding.UTF8.GetByteCount(name) <= MaxNameLength;
+    }
 }

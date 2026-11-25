@@ -237,6 +237,24 @@ public sealed class SyncEngineTests : IDisposable
     }
 
     [Fact]
+    public void A_name_with_no_room_for_the_suffix_stays_plain()
+    {
+        var fits = new string('a', 248) + ".txt";        // 252 + ".gz" = 255
+        var full = new string('b', 249) + ".txt";        // 253 + ".gz" = 256
+        var accented = new string('è', 126) + ".txt";    // 130 characters, 259 UTF-8 bytes with ".gz"
+        var plan = SyncPlan.Build([new SyncEntry(fits, false, 1, T0), new SyncEntry(full, false, 1, T0), new SyncEntry("d/" + accented, false, 1, T0)], null, compress: true);
+        Assert.Contains(plan.Copies, c => c.Target == fits + Compression.Suffix && c.Compressed);
+        Assert.Contains(plan.Copies, c => c.Target == full && !c.Compressed);
+        Assert.Contains(plan.Copies, c => c.Target == "d/" + accented && !c.Compressed);
+    }
+
+    [Theory]
+    [InlineData(@"C:\data\file.txt", @"\\?\C:\data\file.txt")]
+    [InlineData(@"\\server\share\dir\", @"\\?\UNC\server\share\dir")]
+    [InlineData(@"\\?\C:\x", @"\\?\C:\x")]
+    public void Long_path_prefix(string path, string expected) => Assert.Equal(expected, PathUtil.LongPath(path));
+
+    [Fact]
     public void Times_within_two_seconds_are_equal()
     {
         var src = new[] { new SyncEntry("a", false, 10, T0) };

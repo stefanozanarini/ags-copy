@@ -28,6 +28,14 @@ public static class PathUtil
         ShareRoot(path) is { } root ? root[2..root.IndexOf('\\', 2)] : null;
 
     /// <summary>
+    /// The path with the \\?\ prefix Windows APIs called directly need beyond 260 characters
+    /// (.NET adds it by itself). A path that already has it is left as it is.
+    /// </summary>
+    public static string LongPath(string path) =>
+        path.StartsWith(@"\\?\", StringComparison.Ordinal) ? path
+        : IsUnc(path) ? @"\\?\UNC\" + NormalizeDir(path).TrimStart('\\') : @"\\?\" + NormalizeDir(path);
+
+    /// <summary>
     /// Trims spaces and trailing separators, which robocopy misreads before a closing quote
     /// ("D:\data\" ends up as D:\data"). Drive roots keep theirs: D:\.
     /// </summary>

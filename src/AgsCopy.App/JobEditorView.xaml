@@ -248,6 +248,7 @@
                                 <TextBlock Text="{l:T options.compress}" FontWeight="SemiBold" FontSize="15" />
                                 <CheckBox Content="{l:T options.compress.on}" IsChecked="{Binding Compress}" Margin="0,10,0,0" FontWeight="SemiBold" />
                                 <TextBlock Text="{l:T options.compress.hint}" Style="{StaticResource Hint}" Margin="20,2,0,4" />
+                                <TextBlock Text="{l:T options.compress.existing}" Style="{StaticResource Hint}" Margin="20,2,0,4" />
                             </StackPanel>
                         </Border>
 

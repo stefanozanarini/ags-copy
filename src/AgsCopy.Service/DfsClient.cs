@@ -159,8 +159,7 @@ public static class DfsClient
         return Entry(data, path);
     }
 
-    private static string LongPath(string path) =>
-        PathUtil.IsUnc(path) ? @"\\?\UNC\" + PathUtil.NormalizeDir(path).TrimStart('\\') : @"\\?\" + PathUtil.NormalizeDir(path);
+    private static string LongPath(string path) => PathUtil.LongPath(path);
 
     /// <summary>
     /// Volume and file id of a folder, its links followed (opening a junction opens its target); null

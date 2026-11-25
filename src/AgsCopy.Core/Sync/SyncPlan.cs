@@ -77,10 +77,13 @@ public sealed class SyncPlan
         return null;
     }
 
-    /// <summary>Where a source file goes: a.txt is stored as a.txt.gz, unless the source also has an a.txt.gz.</summary>
+    /// <summary>
+    /// Where a source file goes: a.txt is stored as a.txt.gz, unless the source also has an a.txt.gz
+    /// or the name is too long to take the suffix.
+    /// </summary>
     private static string TargetOf(SyncEntry s, ISet<string> sourceNames, bool compress, out bool gz)
     {
-        gz = compress && Compression.IsCompressible(s.Name) && !sourceNames.Contains(s.Relative + Compression.Suffix);
+        gz = compress && Compression.IsCompressible(s.Name) && Compression.SuffixFits(s.Name) && !sourceNames.Contains(s.Relative + Compression.Suffix);
         return gz ? s.Relative + Compression.Suffix : s.Relative;
     }
 

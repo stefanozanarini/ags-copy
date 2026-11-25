@@ -47,7 +47,8 @@ public static class NtfsCompression
                     if (!DeviceIoControl(handle, FsctlSetCompression, ref format, sizeof(short), IntPtr.Zero, 0, out _, IntPtr.Zero))
                         throw new Win32Exception();
                 }
-                var low = GetCompressedFileSize(f.FullName, out var high);
+                // Called directly, so the prefix .NET adds by itself for long paths is ours to add.
+                var low = GetCompressedFileSize(PathUtil.LongPath(f.FullName), out var high);
                 files++;
                 bytes += f.Length;
                 if (low != uint.MaxValue || Marshal.GetLastWin32Error() == 0) saved += f.Length - (((long)high << 32) | low);
