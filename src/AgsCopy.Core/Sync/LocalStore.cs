@@ -2,7 +2,8 @@ namespace AgsCopy.Core.Sync;
 
 /// <summary>A local or \\server\share folder (the share already connected by the caller).</summary>
 /// <param name="followLinks">Go through junctions and symbolic links; by default they are left out.</param>
-public class LocalSource(string root, bool followLinks = false) : ISourceStore
+/// <param name="reportLinks">List the links it does not go through, marked <see cref="SyncEntry.Link"/>, so a mirror does not take their copies in the destination for extras.</param>
+public class LocalSource(string root, bool followLinks = false, bool reportLinks = false) : ISourceStore
 {
     /// <summary>The folder as given (the service passes normalized Windows paths; tests pass Linux ones).</summary>
     protected string Root { get; } = root.Length > 3 ? root.TrimEnd('\\', '/') : root;
@@ -17,12 +18,13 @@ public class LocalSource(string root, bool followLinks = false) : ISourceStore
     public IReadOnlyList<SyncEntry> List(string relative)
     {
         // A larger buffer than the default 4 KB: a share then sends hundreds of names per round trip, not about forty.
-        var options = new EnumerationOptions { AttributesToSkip = followLinks ? 0 : FileAttributes.ReparsePoint, IgnoreInaccessible = false, RecurseSubdirectories = false, BufferSize = 64 * 1024 };
+        var options = new EnumerationOptions { AttributesToSkip = followLinks || reportLinks ? 0 : FileAttributes.ReparsePoint, IgnoreInaccessible = false, RecurseSubdirectories = false, BufferSize = 64 * 1024 };
         var list = new List<SyncEntry>();
         foreach (var i in new DirectoryInfo(Full(relative)).EnumerateFileSystemInfos("*", options))
         {
             var dir = (i.Attributes & FileAttributes.Directory) != 0;
-            list.Add(new SyncEntry(SyncPath.Join(relative, i.Name), dir, dir ? 0 : ((FileInfo)i).Length, i.LastWriteTimeUtc));
+            var link = !followLinks && (i.Attributes & FileAttributes.ReparsePoint) != 0;
+            list.Add(new SyncEntry(SyncPath.Join(relative, i.Name), dir, dir || link ? 0 : ((FileInfo)i).Length, i.LastWriteTimeUtc, link));
         }
         return list;
     }

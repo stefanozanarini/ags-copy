@@ -1,7 +1,8 @@
 namespace AgsCopy.Core.Sync;
 
 /// <summary>A file or folder below a store's root. <see cref="Relative"/> uses '/' on every store.</summary>
-public sealed record SyncEntry(string Relative, bool IsDirectory, long Size, DateTime ModifiedUtc)
+/// <param name="Link">A junction or link the source does not go through: nothing is copied from it, and a mirror leaves its namesake in the destination alone.</param>
+public sealed record SyncEntry(string Relative, bool IsDirectory, long Size, DateTime ModifiedUtc, bool Link = false)
 {
     public string Name => Relative[(Relative.LastIndexOf('/') + 1)..];
 }
@@ -54,4 +55,8 @@ public static class SyncPath
         var i = relative.LastIndexOf('/');
         return i < 0 ? (relative.Length == 0 ? null : "") : relative[..i];
     }
+
+    /// <summary>Whether <paramref name="relative"/> lies inside the folder <paramref name="folder"/>.</summary>
+    public static bool IsUnder(string relative, string folder) =>
+        relative.Length > folder.Length + 1 && relative[folder.Length] == '/' && relative.StartsWith(folder, StringComparison.OrdinalIgnoreCase);
 }

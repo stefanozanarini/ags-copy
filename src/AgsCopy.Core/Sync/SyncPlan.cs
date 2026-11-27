@@ -36,6 +36,11 @@ public sealed class SyncPlan
 
         foreach (var s in source.OrderBy(s => s.Relative, StringComparer.Ordinal))
         {
+            if (s.Link)
+            {
+                expected.Add(s.Relative);
+                continue;
+            }
             if (s.IsDirectory)
             {
                 expected.Add(s.Relative);
@@ -55,9 +60,10 @@ public sealed class SyncPlan
 
         // Extras: the topmost destination items the source does not explain.
         var extraDirs = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var links = source.Where(s => s.Link).Select(s => s.Relative).ToList();
         foreach (var d in (destination ?? []).OrderBy(d => d.Relative, StringComparer.Ordinal))
         {
-            if (expected.Contains(d.Relative)) continue;
+            if (expected.Contains(d.Relative) || links.Any(l => SyncPath.IsUnder(d.Relative, l))) continue;
             if (ExtraAbove(d.Relative, extraDirs) is { } i)
             {
                 if (!d.IsDirectory) plan.Extras[i] = plan.Extras[i] with { Files = plan.Extras[i].Files + 1, Bytes = plan.Extras[i].Bytes + d.Size };
@@ -105,6 +111,11 @@ public sealed class SyncPlan
         var expected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var s in source)
         {
+            if (s.Link)
+            {
+                expected.Add(s.Relative);
+                continue;
+            }
             if (s.IsDirectory)
             {
                 expected.Add(s.Relative);

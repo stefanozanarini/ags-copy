@@ -896,8 +896,8 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
         // Like robocopy without /XJ, the engine then goes through junctions and symbolic links.
         var follow = !job.Options.SkipJunctions;
         return job.Source.IsSftp ? () => Sftp.Open(job.Source, stored?.Source, lang)
-            : links is { Count: > 0 } ? () => new MountedSource(new LocalSource(src, follow), links.ToDictionary(l => l.Relative, l => (ISourceStore)new LocalSource(l.Path, follow)))
-            : () => new LocalSource(src, follow);
+            : links is { Count: > 0 } ? () => new MountedSource(new LocalSource(src, follow, true), links.ToDictionary(l => l.Relative, l => (ISourceStore)new LocalSource(l.Path, follow, true)))
+            : () => new LocalSource(src, follow, true);
     }
 
     private static Func<ITargetStore> TargetOpener(CopyJob job, CopyJob? stored, string dst, string? lang) =>

@@ -363,9 +363,11 @@ public sealed class MountedSource(ISourceStore main, IReadOnlyDictionary<string,
         var list = store.List(rel).Select(e => prefix.Length == 0 ? e : e with { Relative = SyncPath.Join(prefix, e.Relative) }).ToList();
         foreach (var m in _mounts.Keys.Where(k => string.Equals(SyncPath.Parent(k), r, StringComparison.OrdinalIgnoreCase)))
         {
-            // The store above leaves the link out (it is a reparse point) or shows it as a folder.
+            // The store above leaves the link out (it is a reparse point) or shows it as a folder. It is
+            // listed even when its target does not answer: reading it then fails and the run skips it,
+            // where leaving it out would make a mirror delete its copy in the destination.
             list.RemoveAll(e => e.Relative.Equals(m, StringComparison.OrdinalIgnoreCase));
-            if (_mounts[m].Exists()) list.Add(new SyncEntry(m, true, 0, default));
+            list.Add(new SyncEntry(m, true, 0, default));
         }
         return list;
     }

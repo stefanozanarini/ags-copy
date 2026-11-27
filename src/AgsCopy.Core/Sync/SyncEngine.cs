@@ -117,7 +117,7 @@ public static class SyncEngine
             {
                 if (exclusions.Excludes(e.Relative, e.IsDirectory)) continue;
                 all.Add(e);
-                if (e.IsDirectory) pending.Push(e.Relative);
+                if (e.IsDirectory && !e.Link) pending.Push(e.Relative);
             }
         }
         return all;
@@ -134,7 +134,7 @@ public static class SyncEngine
             {
                 if (exclusions.Excludes(e.Relative, e.IsDirectory)) continue;
                 all.Enqueue(e);
-                if (e.IsDirectory) add(e.Relative);
+                if (e.IsDirectory && !e.Link) add(e.Relative);
             }
         }, ct);
         return [.. all];

@@ -194,6 +194,52 @@ public sealed class StreamingSyncTests : IDisposable
     }
 
     [Fact]
+    public async Task A_DFS_link_that_does_not_answer_keeps_its_copy()
+    {
+        Write(Src, "readme.txt", "root");
+        Write(Dst, "Milano/old.pdf", "backup of Milano");
+        Write(Dst, "Milano/sub/deep.pdf", "deep");
+        // The link's target is gone (server offline, access denied): reading it fails, nothing is deleted.
+        ISourceStore Open() => new MountedSource(new LocalSource(Src, false, true),
+            new Dictionary<string, ISourceStore> { ["Milano"] = new LocalSource(Path.Combine(_root, "offline"), false, true) });
+
+        var r = await Run(Job(CopyMode.Mirror), source: Open);
+        Assert.Contains(r.Errors, e => e.Action == "Listing Directory");
+        Assert.Equal(0, r.DeletedCount);
+        Assert.True(File.Exists(Path.Combine(Dst, "Milano", "old.pdf")));
+        Assert.True(File.Exists(Path.Combine(Dst, "Milano", "sub", "deep.pdf")));
+    }
+
+    [Fact]
+    public async Task A_link_the_source_does_not_follow_keeps_its_copy()
+    {
+        Write(Src, "readme.txt", "root");
+        Write(_root, "elsewhere/x.txt", "x");
+        Directory.CreateSymbolicLink(Path.Combine(Src, "Verona"), Path.Combine(_root, "elsewhere"));
+        Write(Dst, "Verona/old.pdf", "backup of Verona");
+
+        var r = await Run(Job(CopyMode.Mirror), source: () => new LocalSource(Src, false, true));
+        Assert.Equal(0, r.DeletedCount);
+        Assert.Equal(1, r.FilesCopied);
+        Assert.True(File.Exists(Path.Combine(Dst, "Verona", "old.pdf")));
+        Assert.False(File.Exists(Path.Combine(Dst, "Verona", "x.txt")));
+    }
+
+    [Fact]
+    public void A_planned_mirror_leaves_what_is_under_an_unfollowed_link()
+    {
+        var source = new List<SyncEntry> { new("a.txt", false, 1, T0), new("Verona", true, 0, default, Link: true) };
+        var destination = new List<SyncEntry>
+        {
+            new("a.txt", false, 1, T0), new("Verona", true, 0, default), new("Verona/old.pdf", false, 5, T0), new("gone.txt", false, 1, T0),
+        };
+        var plan = SyncPlan.Build(source, destination, false);
+        Assert.Equal(["gone.txt"], plan.Extras.Select(e => e.Entry.Relative));
+        Assert.Empty(plan.Copies);
+        Assert.Empty(plan.Directories);
+    }
+
+    [Fact]
     public void Index_survives_a_round_trip_and_rejects_garbage()
     {
         var index = new DestinationIndex { VerifiedUtc = T0 };
