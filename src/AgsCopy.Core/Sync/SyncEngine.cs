@@ -196,6 +196,9 @@ public static class SyncEngine
         var visited = new ConcurrentDictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         var queue = settings.ExtrasFirst ? Channel.CreateUnbounded<SyncCopy>() : Channel.CreateBounded<SyncCopy>(MaxQueued);
         long unchanged = 0, destinationRead = 0, listErrors = 0;
+        // Folders a dropped connection kept from being read: read again once the rest is done.
+        var unread = new ConcurrentQueue<(string Dir, bool New)>();
+        var lastChance = false;
 
         var verify = index == null || walk.Verify;
         bool rootExists;
@@ -219,6 +222,18 @@ public static class SyncEngine
             try
             {
                 ParallelWalk.Run(("", !rootExists), walk.Threads, () => new StorePair(openSource(), openTarget()), Visit, ct);
+                if (!unread.IsEmpty)
+                {
+                    // A share or DFS server that dropped its connections for a moment (a snapshot, a restart)
+                    // is usually back by now: each folder gets one more go, with new connections.
+                    var again = unread.ToArray();
+                    unread.Clear();
+                    Volatile.Write(ref lastChance, true);
+                    log($"Reading again {again.Length} folders that could not be read, in {settings.RetryWaitSeconds}s");
+                    Task.Delay(TimeSpan.FromSeconds(settings.RetryWaitSeconds), ct).Wait(ct);
+                    foreach (var folder in again)
+                        ParallelWalk.Run(folder, walk.Threads, () => new StorePair(openSource(), openTarget()), Visit, ct);
+                }
             }
             finally
             {
@@ -259,6 +274,36 @@ public static class SyncEngine
         }
         return run.Finish();
 
+        // A listing that fails on a dropped connection is tried again at once, as a copy is.
+        IReadOnlyList<SyncEntry> Listed(Func<IReadOnlyList<SyncEntry>> list, string display)
+        {
+            for (var attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    return list();
+                }
+                catch (Exception e) when (IsTransient(e) && attempt < settings.Retries && !ct.IsCancellationRequested)
+                {
+                    log($"Retry {attempt + 1} after {settings.RetryWaitSeconds}s: listing {display}: {e.Message}");
+                    Task.Delay(TimeSpan.FromSeconds(settings.RetryWaitSeconds), ct).Wait(ct);
+                }
+            }
+        }
+
+        // Still unreadable: kept for the second go at the end of the walk, or reported after it.
+        // Nothing below the folder is copied or deleted this run.
+        void Unread(Exception e, string display, (string Dir, bool New) folder)
+        {
+            if (IsTransient(e) && !Volatile.Read(ref lastChance))
+            {
+                unread.Enqueue(folder);
+                return;
+            }
+            Interlocked.Increment(ref listErrors);
+            run.Error(new CopyError(display, Code(e), "Listing Directory", e.Message));
+        }
+
         bool SameRoot(ITargetStore target)
         {
             if (index!.Folder("") is not { } known) return false;
@@ -284,12 +329,11 @@ public static class SyncEngine
             IReadOnlyList<SyncEntry> source, destination;
             try
             {
-                source = pair.Source.List(dir).Where(e => !walk.Exclusions.Excludes(e.Relative, e.IsDirectory)).ToList();
+                source = Listed(() => pair.Source.List(dir), pair.Source.Display(dir)).Where(e => !walk.Exclusions.Excludes(e.Relative, e.IsDirectory)).ToList();
             }
             catch (Exception e) when (IsIo(e) && dir.Length > 0)
             {
-                Interlocked.Increment(ref listErrors);
-                run.Error(new CopyError(pair.Source.Display(dir), Code(e), "Listing Directory", e.Message));
+                Unread(e, pair.Source.Display(dir), folder);
                 return;
             }
             try
@@ -302,14 +346,13 @@ public static class SyncEngine
                 }
                 else
                 {
-                    destination = ReadDestination(pair.Target, dir).Where(e => !walk.Exclusions.Excludes(e.Relative, e.IsDirectory)).ToList();
+                    destination = Listed(() => ReadDestination(pair.Target, dir), pair.Target.Display(dir)).Where(e => !walk.Exclusions.Excludes(e.Relative, e.IsDirectory)).ToList();
                 }
             }
             catch (Exception e) when (IsIo(e) && dir.Length > 0)
             {
-                // Without the destination's side nothing in this folder can be told apart: it waits for the next run.
-                Interlocked.Increment(ref listErrors);
-                run.Error(new CopyError(pair.Target.Display(dir), Code(e), "Listing Directory", e.Message));
+                // Without the destination's side nothing in this folder can be told apart.
+                Unread(e, pair.Target.Display(dir), folder);
                 return;
             }
 
@@ -611,6 +654,13 @@ public static class SyncEngine
     /// <summary>Errors of a single item, which the run reports and goes on from (SFTP errors included).</summary>
     public static bool IsIo(Exception e) =>
         e is IOException or UnauthorizedAccessException || e.GetType().Namespace?.StartsWith("Renci.SshNet", StringComparison.Ordinal) == true;
+
+    /// <summary>
+    /// A failure that may pass: a dropped or refused connection, a busy server. A folder that is not there
+    /// or that the account may not read fails again the same way, at once.
+    /// </summary>
+    public static bool IsTransient(Exception e) =>
+        IsIo(e) && e is not (UnauthorizedAccessException or DirectoryNotFoundException or FileNotFoundException or PathTooLongException);
 
     private static int Code(Exception e) => e is UnauthorizedAccessException ? 5 : e.HResult & 0xFFFF;
 }

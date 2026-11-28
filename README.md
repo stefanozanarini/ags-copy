@@ -225,6 +225,12 @@ AGS-Copy.exe --run <job id>   ──┘   JSON lines, one request per connection
   destination and rebuilds the index. A file deleted from the destination by hand therefore
   comes back at the next full check, not before.
 
+  A folder that cannot be listed because the connection dropped (a file server stalled by a
+  snapshot or restarting, error 64) is tried again like a copy: the job's retries, at once. If it
+  still fails, it is read once more at the end of the walk, with new connections, before it is
+  reported. A folder that is not there or that the account may not read is reported at once.
+  Nothing below an unreadable folder is copied or deleted in that run.
+
   It keeps dates and times but not Windows permissions and attributes. Extra robocopy arguments
   do not apply to it.
 

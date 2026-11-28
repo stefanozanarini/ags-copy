@@ -37,15 +37,16 @@ public sealed class StreamingSyncTests : IDisposable
     };
 
     /// <summary>A run as the service makes it: the index loaded, used (or checked in full) and saved.</summary>
-    private async Task<SyncResult> Run(CopyJob job, bool extrasFirst = false, Func<ISourceStore>? source = null, DateTime? now = null, bool versions = false)
+    private async Task<SyncResult> Run(CopyJob job, bool extrasFirst = false, Func<ISourceStore>? source = null, DateTime? now = null, bool versions = false,
+        int retries = 0, List<string>? log = null)
     {
         var index = DestinationIndex.Load(IndexFile) ?? new DestinationIndex();
         var walk = new SyncWalk { Exclusions = new Exclusions(job), Threads = 4, Index = index, Verify = index.NeedsVerify(now ?? DateTime.UtcNow) };
         var result = await SyncEngine.RunAsync(walk, source ?? (() => new LocalSource(Src)), () => new LocalTarget(Dst), new SyncSettings
         {
-            Mode = job.Mode, Compress = job.Options.Compress, Threads = 3, Retries = 0, ExtrasFirst = extrasFirst, KeepVersions = versions,
+            Mode = job.Mode, Compress = job.Options.Compress, Threads = 3, Retries = retries, RetryWaitSeconds = 0, ExtrasFirst = extrasFirst, KeepVersions = versions,
             StartLocal = new DateTime(2026, 2, 1, 22, 0, 0),
-        }, new ProgressCounter("x"), _ => { }, default);
+        }, new ProgressCounter("x"), line => { if (log != null) lock (log) log.Add(line); }, default);
         Assert.True(walk.Progress.Done);
         index.Save(IndexFile);
         return result;
@@ -191,6 +192,60 @@ public sealed class StreamingSyncTests : IDisposable
     private sealed class FailingSource(string root, string broken) : LocalSource(root), ISourceStore
     {
         public new IReadOnlyList<SyncEntry> List(string relative) => relative == broken ? throw new IOException("Access denied") : base.List(relative);
+    }
+
+    /// <summary>Lists <c>flaky</c> with an error the first <c>failures</c> times (counted across connections).</summary>
+    private sealed class FlakySource(string root, string flaky, int[] failures, Exception error) : LocalSource(root), ISourceStore
+    {
+        public new IReadOnlyList<SyncEntry> List(string relative)
+        {
+            if (relative == flaky && Interlocked.Decrement(ref failures[0]) >= 0) throw error;
+            return base.List(relative);
+        }
+    }
+
+    [Fact]
+    public async Task A_dropped_connection_is_retried_at_once()
+    {
+        Write(Src, "Verona/a.txt", "a");
+        Write(Src, "Rivoli/b.txt", "b");
+        var failures = new[] { 1 };
+        var log = new List<string>();
+        var r = await Run(Job(CopyMode.Mirror), source: () => new FlakySource(Src, "Verona", failures, new IOException("The specified network name is no longer available.")), retries: 1, log: log);
+        Assert.Empty(r.Errors);
+        Assert.Equal(2, r.FilesCopied);
+        Assert.Contains(log, l => l.StartsWith("Retry 1 after 0s: listing", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_folder_still_unreadable_gets_a_second_go_at_the_end()
+    {
+        Write(Src, "Verona/a.txt", "a");
+        Write(Src, "Verona/deep/c.txt", "c");
+        Write(Src, "Rivoli/b.txt", "b");
+        Write(Dst, "Verona/old.txt", "old");
+        // Fails the first pass and its retry; read fine at the end of the walk.
+        var failures = new[] { 2 };
+        var log = new List<string>();
+        var r = await Run(Job(CopyMode.Mirror), source: () => new FlakySource(Src, "Verona", failures, new IOException("The specified network name is no longer available.")), retries: 1, log: log);
+        Assert.Empty(r.Errors);
+        Assert.Equal(3, r.FilesCopied);
+        Assert.Contains(log, l => l.StartsWith("Reading again 1 folders", StringComparison.Ordinal));
+        // Read in full at last, the folder's extras go as in any mirror.
+        Assert.False(File.Exists(Path.Combine(Dst, "Verona", "old.txt")));
+        Assert.True(File.Exists(Path.Combine(Dst, "Verona", "deep", "c.txt")));
+    }
+
+    [Fact]
+    public async Task Access_denied_is_not_retried()
+    {
+        Write(Src, "Secret/a.txt", "a");
+        Write(Src, "Open/b.txt", "b");
+        var failures = new[] { 100 };
+        var r = await Run(Job(), source: () => new FlakySource(Src, "Secret", failures, new UnauthorizedAccessException("Access denied")), retries: 3);
+        Assert.Equal(99, failures[0]); // listed once
+        Assert.Single(r.Errors, e => e.Action == "Listing Directory");
+        Assert.Equal(1, r.FilesCopied);
     }
 
     [Fact]
