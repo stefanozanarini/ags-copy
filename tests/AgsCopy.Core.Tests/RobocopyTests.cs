@@ -144,6 +144,33 @@ public class RobocopyArgsTests
     }
 
     [Fact]
+    public void Office_temporary_files_are_left_out_unless_turned_off()
+    {
+        var job = Job(CopyMode.Mirror);
+        job.Options.ExcludeFiles = ["*.bak", "~$*"];
+        var a = RobocopyArgs.Build(job, @"C:\a", @"D:\b", RobocopyPass.Full, false, null, false);
+        var xf = a.Skip(a.IndexOf("/XF") + 1).TakeWhile(x => !x.StartsWith('/')).ToList();
+        Assert.Equal(["*.bak", "~$*", "~*.tmp", "ppt*.tmp", "*.laccdb", "*.ldb", ".~lock.*#"], xf);
+        var exclusions = new Exclusions(job);
+        Assert.True(exclusions.Excludes(@"Uffici\~$Preventivo.docx", false));
+        Assert.True(exclusions.Excludes("~WRL0001.tmp", false));
+        Assert.True(exclusions.Excludes(".~lock.Bilancio.ods#", false));
+        Assert.False(exclusions.Excludes("Preventivo.docx", false));
+
+        job.Options.ExcludeOfficeTemp = false;
+        a = RobocopyArgs.Build(job, @"C:\a", @"D:\b", RobocopyPass.Full, false, null, false);
+        Assert.Equal(["*.bak", "~$*"], a.Skip(a.IndexOf("/XF") + 1).TakeWhile(x => !x.StartsWith('/')));
+        Assert.False(new Exclusions(job).Excludes("~WRL0001.tmp", false));
+    }
+
+    [Fact]
+    public void Jobs_saved_before_exclude_Office_temporary_files()
+    {
+        var job = System.Text.Json.JsonSerializer.Deserialize<CopyJob>("""{"Name":"old","Options":{"ExcludeFiles":["*.bak"]}}""", Json.Options)!;
+        Assert.True(job.Options.ExcludeOfficeTemp);
+    }
+
+    [Fact]
     public void No_mode_ever_writes_to_the_source()
     {
         foreach (var mode in Enum.GetValues<CopyMode>())

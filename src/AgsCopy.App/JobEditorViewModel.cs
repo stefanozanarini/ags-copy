@@ -305,6 +305,7 @@ public sealed class JobEditorViewModel : ObservableObject
         FatFileTimes = o.FatFileTimes;
         _fileProperties = (int)o.FileProperties;
         ExcludeFiles = string.Join(Environment.NewLine, o.ExcludeFiles);
+        ExcludeOfficeTemp = o.ExcludeOfficeTemp;
         ExcludeDirectories = string.Join(Environment.NewLine, o.ExcludeDirectories);
         ExtraArguments = o.ExtraArguments ?? "";
 
@@ -510,6 +511,7 @@ public sealed class JobEditorViewModel : ObservableObject
     public bool FatFileTimes { get; set; }
     public int FileProperties { get => _fileProperties; set => Set(ref _fileProperties, value); }
     public string ExcludeFiles { get; set; }
+    public bool ExcludeOfficeTemp { get; set; }
     public string ExcludeDirectories { get; set; }
     public string ExtraArguments { get; set; }
 
@@ -645,6 +647,7 @@ public sealed class JobEditorViewModel : ObservableObject
         o.FatFileTimes = FatFileTimes;
         o.FileProperties = (FileProperties)_fileProperties;
         o.ExcludeFiles = Lines(ExcludeFiles);
+        o.ExcludeOfficeTemp = ExcludeOfficeTemp;
         o.ExcludeDirectories = Lines(ExcludeDirectories);
         o.ExtraArguments = string.IsNullOrWhiteSpace(ExtraArguments) ? null : ExtraArguments.Trim();
 

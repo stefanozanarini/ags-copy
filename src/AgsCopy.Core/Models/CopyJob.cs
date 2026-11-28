@@ -271,6 +271,23 @@ public sealed class CopyOptions
     /// <summary>/XF patterns, such as *.tmp or ~$*.</summary>
     public List<string> ExcludeFiles { get; set; } = [];
 
+    /// <summary>
+    /// The temporary and lock files of Office (and LibreOffice) are left out: they are open, or gone,
+    /// while the copy runs and only bring warnings. On by default, jobs saved before included.
+    /// </summary>
+    public bool ExcludeOfficeTemp { get; set; } = true;
+
+    /// <summary>
+    /// ~$name owner files of Word, Excel and PowerPoint, ~WRL0001.tmp and the like of Word, ppt*.tmp of
+    /// PowerPoint, Access lock files, LibreOffice .~lock files. Excel's own temporary files have no
+    /// extension (8 hex digits) and no pattern tells them from other files.
+    /// </summary>
+    public static readonly IReadOnlyList<string> OfficeTempFiles = ["~$*", "~*.tmp", "ppt*.tmp", "*.laccdb", "*.ldb", ".~lock.*#"];
+
+    /// <summary>The file patterns left out: the job's own and, when on, the Office temporary files.</summary>
+    [JsonIgnore]
+    public IEnumerable<string> FilesExcluded => ExcludeOfficeTemp ? ExcludeFiles.Concat(OfficeTempFiles.Where(p => !ExcludeFiles.Contains(p, StringComparer.OrdinalIgnoreCase))) : ExcludeFiles;
+
     /// <summary>/XD names or full paths.</summary>
     public List<string> ExcludeDirectories { get; set; } = [];
 

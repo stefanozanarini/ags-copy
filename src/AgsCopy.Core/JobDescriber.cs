@@ -87,6 +87,7 @@ public static class JobDescriber
         if (sftp) Add(SummaryLevel.Warning, "sum.engine.sftp");
         if (o.Compress) Add(SummaryLevel.Info, job.Destinations.Any(x => x.IsSftp) ? "sum.compress.gz" : "sum.compress", Compression.Suffix);
         if (o.ExcludeFiles.Count > 0) Add(SummaryLevel.Info, "sum.xf", string.Join(", ", o.ExcludeFiles));
+        if (o.ExcludeOfficeTemp) Add(SummaryLevel.Info, "sum.officetemp");
         if (o.ExcludeDirectories.Count > 0) Add(SummaryLevel.Info, "sum.xd", string.Join(", ", o.ExcludeDirectories));
         if (o.ExcludeOlder) Add(SummaryLevel.Info, "sum.xo");
         if (!sftp) Add(SummaryLevel.Info, "sum.props." + o.FileProperties);

@@ -83,6 +83,12 @@ through AGS-Copy's own copy engine. The interface is in Italian (default) and En
     it and ends with a warning.
 
   Network sources cannot use VSS.
+- **Office temporary files** are excluded by default in every job, those saved before included
+  (option next to the files to exclude): `~$*` (the owner files of Word, Excel and PowerPoint),
+  `~*.tmp` (Word), `ppt*.tmp` (PowerPoint), `*.laccdb` and `*.ldb` (Access locks) and `.~lock.*#`
+  (LibreOffice). They are open or gone while the copy runs and only brought warnings. Excel's
+  own temporary files have no extension and cannot be told apart. Copies of them already in a
+  mirror's destination stay: robocopy does not purge what it excludes.
 - **File versions** (optional, per job): before each copy, destination files that robocopy
   would overwrite or (in Mirror) delete are moved to
   `Destination\_AGS-Copy-Versions\<yyyy-MM-dd_HHmmss>\`, keeping their relative path.

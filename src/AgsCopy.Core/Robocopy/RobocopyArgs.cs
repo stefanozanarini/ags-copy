@@ -62,7 +62,7 @@ public static class RobocopyArgs
         if (o.SkipJunctions) a.Add("/XJ");
         if (o.FatFileTimes) a.Add("/FFT");
 
-        var xf = o.ExcludeFiles.Select(s => s.Trim()).Where(s => s.Length > 0).ToList();
+        var xf = o.FilesExcluded.Select(s => s.Trim()).Where(s => s.Length > 0).ToList();
         if (xf.Count > 0)
         {
             a.Add("/XF");

@@ -9,7 +9,7 @@ namespace AgsCopy.Core;
 /// </summary>
 public sealed class Exclusions(CopyJob job)
 {
-    private readonly List<string> _files = job.Options.ExcludeFiles.Select(Clean).Where(p => p.Length > 0).ToList();
+    private readonly List<string> _files = job.Options.FilesExcluded.Select(Clean).Where(p => p.Length > 0).ToList();
     private readonly List<string> _dirs = job.Options.ExcludeDirectories.Select(Clean).Where(p => p.Length > 0).ToList();
     private readonly string _source = job.Source.Path;
 
