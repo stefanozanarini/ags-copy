@@ -37,7 +37,10 @@ through AGS-Copy's own copy engine. The interface is in Italian (default) and En
   are walked only when it does not answer) and copies each one, from the share it points to, into the same place in the
   destination. The rest of the source is copied without the links, which are excluded on both
   sides, so a mirror never deletes their copies. The link targets are connected with the source's
-  credentials. A source already inside a link needs nothing: the DFS client follows it. Through
+  credentials. A link whose server does not answer (error 53, *network path not found*) does
+  not hold the others, which are read and connected all at once: it is left out, with a warning
+  in the report, and its copy in the destination stays as it was. A source already inside a link
+  needs nothing: the DFS client follows it. Through
   DFS two names can be the same folder, so runs and restores also compare the real shares
   behind the paths: a source is never copied into itself, and nothing is restored into a source.
 - **Junctions on shares**: robocopy's `/XJ` (on by default) skips junctions and symbolic links,

@@ -17,6 +17,8 @@ public static class NetworkShare
 
     private static readonly Dictionary<string, int> Counts = new(StringComparer.OrdinalIgnoreCase);
     private static readonly object Lock = new();
+    // One lock per share: a server that does not answer keeps only its own share waiting.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, object> ShareLocks = new(StringComparer.OrdinalIgnoreCase);
 
     public sealed class Lease : IDisposable
     {
@@ -38,33 +40,39 @@ public static class NetworkShare
     public static Lease Connect(string uncPath, string userName, string password)
     {
         var root = Core.PathUtil.ShareRoot(uncPath) ?? throw new NetworkShareException(87, "Not a \\\\server\\share path: " + uncPath);
-        lock (Lock)
+        lock (ShareLocks.GetOrAdd(root, _ => new object()))
         {
-            if (Counts.TryGetValue(root, out var n))
+            lock (Lock)
             {
-                Counts[root] = n + 1;
-                return new Lease(root);
+                if (Counts.TryGetValue(root, out var n))
+                {
+                    Counts[root] = n + 1;
+                    return new Lease(root);
+                }
             }
 
             var res = new NetResource { dwType = ResourceTypeDisk, lpRemoteName = root };
             var rc = WNetAddConnection2(ref res, password, userName, 0);
             if (rc != 0) throw new NetworkShareException(rc, Message(rc, root));
-            Counts[root] = 1;
+            lock (Lock) Counts[root] = 1;
             return new Lease(root);
         }
     }
 
     private static void Release(string root)
     {
-        lock (Lock)
+        lock (ShareLocks.GetOrAdd(root, _ => new object()))
         {
-            if (!Counts.TryGetValue(root, out var n)) return;
-            if (n > 1)
+            lock (Lock)
             {
-                Counts[root] = n - 1;
-                return;
+                if (!Counts.TryGetValue(root, out var n)) return;
+                if (n > 1)
+                {
+                    Counts[root] = n - 1;
+                    return;
+                }
+                Counts.Remove(root);
             }
-            Counts.Remove(root);
             WNetCancelConnection2(root, 0, true);
         }
     }

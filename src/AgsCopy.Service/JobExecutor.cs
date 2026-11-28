@@ -719,19 +719,21 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
         var leases = new List<NetworkShare.Lease>();
         if (!part.Source.HasCredential) return leases;
         var password = PasswordFor(part.Source, stored, lang);
-        foreach (var path in links.Where(l => l.Kind == LinkKind.Dfs).Select(l => l.Path).Prepend(src))
+        // All at once: a server that does not answer keeps its link waiting until the network gives up.
+        Parallel.ForEach(links.Where(l => l.Kind == LinkKind.Dfs).Select(l => l.Path).Prepend(src), new ParallelOptions { MaxDegreeOfParallelism = 16 }, path =>
         {
             var target = DfsClient.Resolve(path);
-            if (string.Equals(target, path, StringComparison.OrdinalIgnoreCase) || PathUtil.ShareRoot(target) is not { } share) continue;
+            if (string.Equals(target, path, StringComparison.OrdinalIgnoreCase) || PathUtil.ShareRoot(target) is not { } share) return;
             try
             {
-                leases.Add(NetworkShare.Connect(share, part.Source.Credential!.UserName, password));
+                var lease = NetworkShare.Connect(share, part.Source.Credential!.UserName, password);
+                lock (leases) leases.Add(lease);
             }
             catch (NetworkShareException e)
             {
                 log.LogInformation("DFS target {Share} of {Path} not connected: {Message}", share, path, e.Message);
             }
-        }
+        });
         return leases;
     }
 
@@ -754,12 +756,36 @@ public sealed class JobExecutor(JobStore store, HistoryStore history, ReportStor
         var extrasBefore = versions.DeletedCount;
         var archivedBefore = versions.Count;
 
-        var tasks = new List<(RobocopyTask Task, Segment Segment, string ConsoleSource)>();
-        foreach (var s in run.Segments)
+        // Each segment is split by its top-level folders. The segments are read all at once: a DFS link
+        // whose server does not answer holds its reading until the network gives up, and it must not
+        // hold the others. A link that cannot be read is left out, its copy in the destination untouched.
+        rj.SetPhase("activity.phase.segments", run.Src);
+        (Segment Segment, IReadOnlyList<RobocopyTask> Tasks, string? Error) Plan(Segment s)
         {
-            var names = s.Job.Options.Processes > 1 ? TopLevelFolders(s.Src, s.Job.Options.SkipJunctions) : [];
+            try
+            {
+                return (s, ParallelPlan.Build(s.Job, s.Job.Options.Processes > 1 ? TopLevelFolders(s.Src, s.Job.Options.SkipJunctions) : []), null);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                // The source itself was checked: robocopy says what goes wrong with it.
+                return s.Prefix.Length == 0 ? (s, ParallelPlan.Build(s.Job, []), null) : (s, [], e.Message);
+            }
+        }
+        var plans = await Task.WhenAll(run.Segments.Select(s => Task.Factory.StartNew(() => Plan(s), ct, TaskCreationOptions.LongRunning, TaskScheduler.Default)));
+        rj.SetPhase(null);
+        var tasks = new List<(RobocopyTask Task, Segment Segment, string ConsoleSource)>();
+        foreach (var (s, planned, error) in plans)
+        {
+            if (error != null)
+            {
+                notes.Add(run.Label + Loc.Fl(lang, "run.link.unreachable", s.Prefix, error));
+                record.Outcome = Worse(record.Outcome, RunOutcome.Warning);
+                log.LogWarning("Job {Name}: link {Link} not copied: {Message}", part.Name, s.Src, error);
+                continue;
+            }
             var consoleSource = RobocopyProcess.AsConsoleText(s.Src);
-            tasks.AddRange(ParallelPlan.Build(s.Job, names).Select(t => (t, s, consoleSource)));
+            tasks.AddRange(planned.Select(t => (t, s, consoleSource)));
         }
 
         var first = parts.Count;
