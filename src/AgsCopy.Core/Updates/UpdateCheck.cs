@@ -13,7 +13,11 @@ public sealed record UpdateInfo(Version Version, string PageUrl, string? MsiUrl,
 /// </summary>
 public static class UpdateCheck
 {
-    public const string Repository = "stefanozanarini/ags-copy";
+    /// <summary>
+    /// The public repository that only holds the releases: the source may be private, the downloads and
+    /// this check stay reachable without an account. The build publishes every tagged version there.
+    /// </summary>
+    public const string Repository = "stefanozanarini/ags-copy-releases";
     public const string ReleasesPage = "https://github.com/" + Repository + "/releases";
     private const string LatestApi = "https://api.github.com/repos/" + Repository + "/releases/latest";
 

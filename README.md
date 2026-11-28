@@ -179,7 +179,7 @@ through AGS-Copy's own copy engine. The interface is in Italian (default) and En
   manual run. Robocopy runs inside a Windows job object that ends with the service, so a crash
   never leaves a robocopy copying on its own next to the resumed run.
 - **Updates**: at every start, the configuration window and the tray icon ask GitHub for the
-  latest release. When it is newer, the window shows a banner and the tray a notification and a
+  latest release of `ags-copy-releases`. When it is newer, the window shows a banner and the tray a notification and a
   menu entry. *Update now* downloads the `.msi`, runs it (Windows asks for an administrator) and
   starts the tray icon again. Offline computers just skip the check.
 
@@ -299,8 +299,12 @@ which runs only on Windows: `build\package.ps1 [-Version x.y.z]` gives
 
   A failed check stops the release.
 
-A `v1.2.3` tag also publishes a GitHub release named after it, with both attached. That
-release is what installed copies find when they look for updates. To release:
+A `v1.2.3` tag also publishes a release named after it, with both attached, in the public
+repository [ags-copy-releases](https://github.com/stefanozanarini/ags-copy-releases): the
+downloads stay public even when the source repository is private. The notes list the commits
+since the previous tag. That release is what installed copies find when they look for updates.
+The workflow needs the `RELEASES_TOKEN` secret: a fine-grained token with *Contents: read and
+write* on `ags-copy-releases` only. To release:
 
 ```bash
 git tag v0.2.0 && git push origin v0.2.0

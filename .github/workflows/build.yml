@@ -38,6 +38,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the release notes list the commits since the previous tag
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
@@ -71,10 +73,28 @@ jobs:
             publish/AGS-Copy-*.msi
             publish/AGS-Copy-Portable-*.exe
 
-      # The app looks for the latest release and its .msi asset when it starts.
+      # Releases go to a public repository of their own, so the source can be private while anyone can
+      # download the .msi. The app looks there for the latest release and its .msi asset when it starts.
+      # RELEASES_TOKEN: a fine-grained token with Contents read and write on that repository only.
       - name: Publish the release
         if: github.ref_type == 'tag'
         shell: pwsh
         env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          RELEASES_REPO: stefanozanarini/ags-copy-releases
+        run: |
+          $previous = git describe --tags --abbrev=0 "$env:GITHUB_REF_NAME^" 2>$null
+          $range = if ($previous) { "$previous..$env:GITHUB_REF_NAME" } else { $env:GITHUB_REF_NAME }
+          $notes = "## Changes`n`n" + ((git log --no-merges --format='- %s' $range) -join "`n")
+          Set-Content -Path notes.md -Value $notes -Encoding utf8
+          gh release create $env:GITHUB_REF_NAME (Get-Item publish\AGS-Copy-*.msi).FullName (Get-Item publish\AGS-Copy-Portable-*.exe).FullName `
+            --repo $env:RELEASES_REPO --title "AGS-Copy ${{ steps.version.outputs.version }}" --notes-file notes.md
+
+      # Copies older than 0.5.9 look for updates in this repository: while it is public they find the
+      # release here too, and with it the version that looks in the releases repository.
+      - name: Publish the release here too while this repository is public
+        if: github.ref_type == 'tag' && !github.event.repository.private
+        shell: pwsh
+        env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create $env:GITHUB_REF_NAME (Get-Item publish\AGS-Copy-*.msi).FullName (Get-Item publish\AGS-Copy-Portable-*.exe).FullName --title "AGS-Copy ${{ steps.version.outputs.version }}" --generate-notes
+        run: gh release create $env:GITHUB_REF_NAME (Get-Item publish\AGS-Copy-*.msi).FullName (Get-Item publish\AGS-Copy-Portable-*.exe).FullName --title "AGS-Copy ${{ steps.version.outputs.version }}" --notes-file notes.md
